@@ -1,2 +1,4 @@
 *_old.*
 *.pyc
+downloads/
+.venv/

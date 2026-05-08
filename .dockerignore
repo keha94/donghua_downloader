@@ -1,0 +1,9 @@
+.git
+.mypy_cache
+venv
+.venv
+__pycache__
+*.pyc
+*_old.*
+downloads
+.env

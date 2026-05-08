@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "donghua-downloader"
+version = "0.1.0"
+description = "FastAPI app to manage and download donghua from animexin.dev (Mediafire + Playwright)."
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.9"
+fastapi = "0.115.6"
+uvicorn = { version = "0.34.0", extras = ["standard"] }
+jinja2 = "3.1.5"
+python-multipart = "0.0.20"
+filelock = "3.16.1"
+beautifulsoup4 = "4.13.4"
+certifi = "2025.7.14"
+charset-normalizer = "3.4.2"
+greenlet = "3.2.3"
+idna = "3.10"
+playwright = "1.53.0"
+pyee = "13.0.0"
+requests = "2.32.4"
+soupsieve = "2.7"
+tqdm = "4.67.1"
+typing-extensions = "4.14.1"
+urllib3 = "2.5.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

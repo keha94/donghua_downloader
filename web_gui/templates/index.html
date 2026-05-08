@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Donghua Downloader</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <h1>Donghua Downloader</h1>
+      <p class="muted">Config: <code id="config-path">{{ config_path }}</code></p>
+    </header>
+
+    <p id="flash" class="flash" role="status" aria-live="polite"></p>
+
+    <section class="card downloader-card">
+      <div class="section-head">
+        <h2>Downloader</h2>
+        <span id="download-status" class="muted download-status">Status: …</span>
+      </div>
+      <p class="hint muted">
+        Runs <code>run_downloads()</code> in a <strong>background thread</strong> (can take a long time). Output appears in the activity log below. Only one run at a time. While the server is up, a scheduled pass also runs every hour if idle (override with <code>DOWNLOAD_SCHEDULE_SECONDS</code>, or set <code>0</code> to disable).
+      </p>
+      <div class="form-actions">
+        <button type="button" class="btn primary" id="btn-run-download">Run downloader</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Add show</h2>
+      <form id="form-add" class="form-grid">
+        <label>
+          Series page URL
+          <input type="url" name="link" required placeholder="https://animexin.dev/…" autocomplete="off" />
+        </label>
+        <label>
+          Last episode (already have)
+          <input type="number" name="last_ep" min="0" value="0" required />
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Add show</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Shows</h2>
+        <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table class="shows-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Season</th>
+              <th>Last EP</th>
+              <th>Link</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="shows-body">
+            <tr><td colspan="5" class="muted center">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card download-progress-card" aria-labelledby="download-progress-heading">
+      <h2 id="download-progress-heading">Download progress</h2>
+      <p class="hint muted">
+        Live byte progress while an episode file is downloading. Shows idle when no file transfer is active (the downloader may still be resolving links or processing another show).
+      </p>
+      <div id="download-progress-slot" class="download-progress-slot" aria-live="polite">
+        <p class="muted download-progress-idle">No file download in progress.</p>
+      </div>
+    </section>
+
+    <section class="card log-card">
+      <div class="section-head">
+        <h2>Activity log</h2>
+        <div class="log-toolbar">
+          <label class="log-pause-label muted">
+            <input type="checkbox" id="log-pause" />
+            Pause
+          </label>
+          <button type="button" class="btn ghost" id="btn-log-refresh">Refresh log</button>
+          <button type="button" class="btn ghost" id="btn-log-clear">Clear</button>
+        </div>
+      </div>
+      <p class="hint muted">
+        Same lines as the server terminal, including <code>print()</code> while resolving URLs. Each file download logs a start / finish (or failure) line here; byte progress is in the card above.
+      </p>
+      <pre id="log-body" class="log-body" aria-live="polite"></pre>
+    </section>
+  </div>
+
+  <dialog id="dlg-edit" class="dialog">
+    <form id="form-edit" class="dialog-inner">
+      <h3>Edit show</h3>
+      <p class="muted edit-title" id="edit-title"></p>
+      <input type="hidden" name="index" />
+      <label>
+        Series page URL
+        <input type="url" name="link" required />
+      </label>
+      <label>
+        Last episode (already have)
+        <input type="number" name="last_ep" min="0" required />
+      </label>
+      <p class="hint muted">Changing the URL reloads title and folder names from the site (same as remove + add).</p>
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" id="edit-cancel">Cancel</button>
+        <button type="submit" class="btn primary" value="default">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const flash = document.getElementById("flash");
+    const tbody = document.getElementById("shows-body");
+    const downloadProgressSlot = document.getElementById("download-progress-slot");
+    const dlg = document.getElementById("dlg-edit");
+    const formEdit = document.getElementById("form-edit");
+
+    function setFlash(msg, kind) {
+      flash.textContent = msg || "";
+      flash.className = "flash" + (kind ? " " + kind : "");
+    }
+
+    function formatApiError(data, r) {
+      const d = data && data.detail;
+      if (typeof d === "string") return d;
+      if (Array.isArray(d)) {
+        return d
+          .map((x) => {
+            if (typeof x === "string") return x;
+            const loc = Array.isArray(x.loc) ? x.loc.filter((p) => p !== "body").join(".") : "";
+            const msg = x.msg || x.message || JSON.stringify(x);
+            return loc ? loc + ": " + msg : msg;
+          })
+          .join(" | ");
+      }
+      if (data && data._raw) return String(data._raw);
+      return r.statusText || "Request failed";
+    }
+
+    async function api(path, opts = {}) {
+      const r = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...opts.headers },
+        ...opts,
+      });
+      const text = await r.text();
+      let data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          if (!r.ok) data = { detail: text.slice(0, 2000) };
+        }
+      }
+      if (!r.ok) {
+        await refreshLogs();
+        throw new Error(formatApiError(data, r));
+      }
+      return data;
+    }
+
+    function truncateUrl(u, max) {
+      if (!u) return "";
+      return u.length <= max ? u : u.slice(0, max - 1) + "…";
+    }
+
+    let latestEpisodeProgress = { active: false };
+
+    function formatSpeed(bps) {
+      const n0 = Number(bps);
+      if (!n0 || n0 <= 0) return "";
+      let n = n0;
+      const units = ["B/s", "KiB/s", "MiB/s", "GiB/s"];
+      let i = 0;
+      while (n >= 1024 && i < units.length - 1) {
+        n /= 1024;
+        i++;
+      }
+      if (i === 0) return Math.round(n) + " " + units[0];
+      const rounded = n < 10 ? n.toFixed(1) : String(Math.round(n));
+      return rounded + " " + units[i];
+    }
+
+    function speedSuffix(p) {
+      const s = formatSpeed(p.speed_bps);
+      return s ? " · " + escapeHtml(s) : "";
+    }
+
+    function renderEpisodeProgressBarMarkup(p) {
+      const ep = p.episode != null ? "EP " + p.episode : "Episode";
+      const fn = p.filename ? escapeHtml(p.filename) : "";
+      const label = fn ? ep + " · " + fn : ep;
+      if (p.indeterminate) {
+        return (
+          '<div class="episode-progress-inner indeterminate" role="progressbar" aria-busy="true">' +
+          '<div class="bar-track"><div class="bar-fill"></div></div>' +
+          '<span class="episode-progress-label muted">' +
+          label +
+          " — downloading…" +
+          speedSuffix(p) +
+          "</span></div>"
+        );
+      }
+      const pct = Math.round(Number(p.percent) || 0);
+      return (
+        '<div class="episode-progress-inner" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+        pct +
+        '">' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' +
+        pct +
+        '%"></div></div>' +
+        '<span class="episode-progress-label muted">' +
+        label +
+        " — " +
+        pct +
+        "%" +
+        speedSuffix(p) +
+        "</span></div>"
+      );
+    }
+
+    function renderDownloadProgressCard() {
+      const p = latestEpisodeProgress;
+      if (!p.active) {
+        downloadProgressSlot.innerHTML =
+          '<p class="muted download-progress-idle">No file download in progress.</p>';
+        return;
+      }
+      const title = p.show_name ? escapeHtml(String(p.show_name)) : "Show";
+      let linkHtml = "";
+      if (p.show_link) {
+        linkHtml =
+          '<p class="muted download-progress-link"><a href="' +
+          escapeAttr(p.show_link) +
+          '" target="_blank" rel="noopener">' +
+          escapeHtml(truncateUrl(p.show_link, 56)) +
+          "</a></p>";
+      }
+      downloadProgressSlot.innerHTML =
+        '<div class="download-progress-active">' +
+        '<p class="download-progress-show-title">' +
+        title +
+        "</p>" +
+        linkHtml +
+        renderEpisodeProgressBarMarkup(p) +
+        "</div>";
+    }
+
+    async function refreshEpisodeProgress() {
+      try {
+        const r = await fetch("/api/download/progress");
+        latestEpisodeProgress = await r.json();
+        renderDownloadProgressCard();
+      } catch (_) {}
+    }
+
+    function renderShows(shows) {
+      if (!shows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="muted center">No shows yet. Add one above.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = shows
+        .map(
+          (s) => `
+        <tr data-index="${s.index}">
+          <td class="name">${escapeHtml(s.name)}</td>
+          <td>${escapeHtml(s.saison || "")}</td>
+          <td class="num">${s.last_ep}</td>
+          <td class="link"><a href="${escapeAttr(s.link)}" target="_blank" rel="noopener">${escapeHtml(truncateUrl(s.link, 48))}</a></td>
+          <td class="actions">
+            <button type="button" class="btn small ghost btn-edit" data-index="${s.index}">Edit</button>
+            <button type="button" class="btn small danger btn-remove" data-index="${s.index}">Remove</button>
+          </td>
+        </tr>`
+        )
+        .join("");
+      tbody.querySelectorAll(".btn-edit").forEach((btn) => btn.addEventListener("click", onEdit));
+      tbody.querySelectorAll(".btn-remove").forEach((btn) => btn.addEventListener("click", onRemove));
+    }
+
+    function escapeHtml(t) {
+      const d = document.createElement("div");
+      d.textContent = t;
+      return d.innerHTML;
+    }
+    function escapeAttr(t) {
+      return String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    }
+
+    async function loadShows() {
+      setFlash("");
+      try {
+        const data = await api("/api/shows");
+        renderShows(data.shows || []);
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="error center">${escapeHtml(e.message)}</td></tr>`;
+        await refreshLogs();
+      }
+    }
+
+    document.getElementById("form-add").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const link = fd.get("link").trim();
+      const last_ep = parseInt(fd.get("last_ep"), 10) || 0;
+      setFlash("Adding…");
+      try {
+        await api("/api/shows", { method: "POST", body: JSON.stringify({ link, last_ep }) });
+        ev.target.reset();
+        ev.target.querySelector("[name=last_ep]").value = "0";
+        setFlash("Show added.", "ok");
+        await refreshLogs();
+        await loadShows();
+      } catch (e) {
+        setFlash(e.message, "err");
+        await refreshLogs();
+      }
+    });
+
+    document.getElementById("btn-refresh").addEventListener("click", loadShows);
+
+    let showsCache = [];
+    async function onEdit(ev) {
+      const idx = parseInt(ev.target.getAttribute("data-index"), 10);
+      try {
+        const data = await api("/api/shows");
+        showsCache = data.shows || [];
+      } catch (_) {}
+      const s = showsCache.find((x) => x.index === idx);
+      if (!s) return;
+      formEdit.querySelector("[name=index]").value = String(idx);
+      formEdit.querySelector("[name=link]").value = s.link;
+      formEdit.querySelector("[name=last_ep]").value = String(s.last_ep);
+      document.getElementById("edit-title").textContent = s.name;
+      dlg.showModal();
+    }
+
+    async function onRemove(ev) {
+      const idx = parseInt(ev.target.getAttribute("data-index"), 10);
+      if (!confirm("Remove this show from the list?")) return;
+      setFlash("Removing…");
+      try {
+        await api("/api/shows/" + idx, { method: "DELETE" });
+        setFlash("Show removed.", "ok");
+        await refreshLogs();
+        await loadShows();
+      } catch (e) {
+        setFlash(e.message, "err");
+        await refreshLogs();
+      }
+    }
+
+    document.getElementById("edit-cancel").addEventListener("click", () => dlg.close());
+
+    formEdit.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(formEdit);
+      const index = parseInt(fd.get("index"), 10);
+      const link = fd.get("link").trim();
+      const last_ep = parseInt(fd.get("last_ep"), 10);
+      setFlash("Saving…");
+      try {
+        await api("/api/shows/" + index, {
+          method: "PUT",
+          body: JSON.stringify({ link, last_ep }),
+        });
+        dlg.close();
+        setFlash("Show updated.", "ok");
+        await refreshLogs();
+        await loadShows();
+      } catch (e) {
+        setFlash(e.message, "err");
+        await refreshLogs();
+      }
+    });
+
+    const logBody = document.getElementById("log-body");
+    const logPause = document.getElementById("log-pause");
+
+    async function refreshLogs() {
+      if (logPause.checked) return;
+      try {
+        const r = await fetch("/api/logs");
+        const data = await r.json();
+        const text = (data.lines || []).join("\n");
+        if (logBody.textContent !== text) {
+          logBody.textContent = text;
+          logBody.scrollTop = logBody.scrollHeight;
+        }
+      } catch (_) {}
+    }
+
+    document.getElementById("btn-log-refresh").addEventListener("click", refreshLogs);
+    document.getElementById("btn-log-clear").addEventListener("click", async () => {
+      try {
+        await fetch("/api/logs", { method: "DELETE" });
+        logBody.textContent = "";
+        await refreshLogs();
+      } catch (_) {}
+    });
+
+    setInterval(refreshLogs, 1200);
+    loadShows();
+    refreshLogs();
+    refreshEpisodeProgress();
+
+    const downloadStatusEl = document.getElementById("download-status");
+
+    async function refreshDownloadStatus() {
+      try {
+        const r = await fetch("/api/download/status");
+        const s = await r.json();
+        let line = "Idle";
+        if (s.running && s.thread_alive) line = "Running…";
+        else if (s.running && !s.thread_alive) line = "Starting…";
+        if (s.error) line += " — last error: " + s.error;
+        else if (s.finished_at && !s.running) line = "Idle (last finished " + s.finished_at + ")";
+        const sec = s.schedule_interval_seconds;
+        let sched = "";
+        if (sec > 0) {
+          if (sec % 3600 === 0) sched = " · auto every " + sec / 3600 + "h";
+          else if (sec % 60 === 0) sched = " · auto every " + sec / 60 + "m";
+          else sched = " · auto every " + sec + "s";
+        } else sched = " · auto off";
+        downloadStatusEl.textContent = "Status: " + line + sched;
+      } catch (_) {
+        downloadStatusEl.textContent = "Status: (unavailable)";
+      }
+    }
+
+    document.getElementById("btn-run-download").addEventListener("click", async () => {
+      if (!confirm("Start the downloader? It may run for a long time.")) return;
+      setFlash("Starting downloader…");
+      try {
+        const r = await fetch("/api/download", { method: "POST" });
+        const data = await r.json().catch(() => ({}));
+        if (r.status === 409) {
+          setFlash(data.detail || "Already running", "err");
+        } else if (!r.ok) {
+          setFlash(data.detail || r.statusText, "err");
+        } else {
+          setFlash("Downloader started in background.", "ok");
+        }
+        await refreshDownloadStatus();
+        await refreshLogs();
+      } catch (e) {
+        setFlash(e.message, "err");
+        await refreshLogs();
+      }
+    });
+
+    setInterval(refreshDownloadStatus, 2000);
+    setInterval(refreshEpisodeProgress, 600);
+    refreshDownloadStatus();
+  </script>
+</body>
+</html>
