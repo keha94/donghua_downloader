@@ -60,6 +60,15 @@ def sanitize_path_component(s: str, *, max_len: int = 200) -> str:
 
 
 _WS_COLLAPSE = re.compile(r"\s+")
+_TRAILING_YEAR_PARENS = re.compile(r"\(\s*(\d{4})\s*\)\s*$")
+
+
+def _name_already_has_year_suffix(name: str, year: str) -> bool:
+    """True if ``name`` ends with ``(year)`` — Skyhook titles often include the year already."""
+    if not year:
+        return False
+    m = _TRAILING_YEAR_PARENS.search(name.rstrip())
+    return bool(m and m.group(1) == year)
 
 
 def normalize_series_slug(name: str, *, max_len: int = 200) -> str:
@@ -218,8 +227,8 @@ def get_cached_series_data(
 
 
 def series_root_folder(data: TVDBSeriesData) -> str:
-    """``Series Name (2010)`` style folder."""
-    if data.year:
+    """``Series Name (2010)`` style folder; skips an extra ``(year)`` if the title already ends with it."""
+    if data.year and not _name_already_has_year_suffix(data.name, data.year):
         return sanitize_path_component(f"{data.name} ({data.year})")
     return sanitize_path_component(data.name)
 

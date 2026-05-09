@@ -49,19 +49,19 @@
         <table class="shows-table">
           <thead>
             <tr>
-              <th>Kind</th>
-              <th>Name</th>
-              <th>Folder</th>
-              <th>Season</th>
-              <th>Last EP</th>
-              <th>Last Download</th>
-              <th>qBit</th>
-              <th>Link</th>
-              <th></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="kind">Kind<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="name">Name<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="folder">Folder<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="season">Season<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="last_ep">Last EP<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="last_downloaded_at">Last Download<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="rss_pending">qBit<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="link">Link<span class="sort-indicator" aria-hidden="true"></span></button></th>
+              <th scope="col" class="shows-th-actions" aria-label="Actions"></th>
             </tr>
           </thead>
           <tbody id="shows-body">
-            <tr><td colspan="8" class="muted center">Loading…</td></tr>
+            <tr><td colspan="9" class="muted center">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -466,12 +466,87 @@
       });
     }
 
-    function renderShows(shows) {
-      if (!shows.length) {
+    let showsData = [];
+    let showsSort = { key: null, dir: "asc" };
+
+    function updateShowsSortHeaderUI() {
+      document.querySelectorAll(".shows-table .th-sort").forEach((btn) => {
+        const key = btn.getAttribute("data-sort");
+        const th = btn.closest("th");
+        const active = showsSort.key === key;
+        btn.classList.toggle("is-active", active);
+        const ind = btn.querySelector(".sort-indicator");
+        if (ind) {
+          ind.textContent = active ? (showsSort.dir === "asc" ? "▲" : "▼") : "";
+        }
+        if (th) {
+          if (active) {
+            th.setAttribute("aria-sort", showsSort.dir === "asc" ? "ascending" : "descending");
+          } else {
+            th.removeAttribute("aria-sort");
+          }
+        }
+      });
+    }
+
+    function compareShowsPair(a, b, key) {
+      switch (key) {
+        case "kind":
+          return showKindLabel(a).localeCompare(showKindLabel(b));
+        case "name":
+          return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
+        case "folder":
+          return String(a.folder_series || a.series || "").localeCompare(
+            String(b.folder_series || b.series || ""),
+            undefined,
+            { sensitivity: "base" }
+          );
+        case "season": {
+          const sa = parseInt(String(a.season ?? ""), 10);
+          const sb = parseInt(String(b.season ?? ""), 10);
+          const va = Number.isFinite(sa) ? sa : Number.POSITIVE_INFINITY;
+          const vb = Number.isFinite(sb) ? sb : Number.POSITIVE_INFINITY;
+          return va - vb;
+        }
+        case "last_ep":
+          return (Number(a.last_ep) || 0) - (Number(b.last_ep) || 0);
+        case "last_downloaded_at": {
+          const ta = a.last_downloaded_at ? new Date(a.last_downloaded_at).getTime() : NaN;
+          const tb = b.last_downloaded_at ? new Date(b.last_downloaded_at).getTime() : NaN;
+          const fa = Number.isFinite(ta);
+          const fb = Number.isFinite(tb);
+          if (!fa && !fb) return 0;
+          if (!fa) return 1;
+          if (!fb) return -1;
+          return ta - tb;
+        }
+        case "rss_pending": {
+          const pa = a.rss_pending != null && Number(a.rss_pending) > 0 ? Number(a.rss_pending) : 0;
+          const pb = b.rss_pending != null && Number(b.rss_pending) > 0 ? Number(b.rss_pending) : 0;
+          return pa - pb;
+        }
+        case "link":
+          return String(a.link || "").localeCompare(String(b.link || ""));
+        default:
+          return 0;
+      }
+    }
+
+    function renderShows() {
+      if (!showsData.length) {
         tbody.innerHTML = '<tr><td colspan="9" class="muted center">No shows yet. Use <strong>Add show</strong> to create one.</td></tr>';
         return;
       }
-      tbody.innerHTML = shows
+      const key = showsSort.key;
+      const dir = showsSort.dir === "desc" ? -1 : 1;
+      const rows = key
+        ? [...showsData].sort((a, b) => {
+            const r = compareShowsPair(a, b, key);
+            if (r !== 0) return dir * r;
+            return (a.index ?? 0) - (b.index ?? 0);
+          })
+        : [...showsData];
+      tbody.innerHTML = rows
         .map(
           (s) => `
         <tr data-index="${s.index}">
@@ -507,7 +582,9 @@
       setFlash("");
       try {
         const data = await api("/api/shows");
-        renderShows(data.shows || []);
+        showsData = data.shows || [];
+        updateShowsSortHeaderUI();
+        renderShows();
       } catch (e) {
         tbody.innerHTML = `<tr><td colspan="9" class="error center">${escapeHtml(e.message)}</td></tr>`;
         await refreshLogs();
@@ -611,6 +688,21 @@
     });
 
     document.getElementById("btn-refresh").addEventListener("click", loadShows);
+
+    document.querySelector(".shows-table thead").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".th-sort");
+      if (!btn) return;
+      const key = btn.getAttribute("data-sort");
+      if (!key) return;
+      if (showsSort.key === key) {
+        showsSort.dir = showsSort.dir === "asc" ? "desc" : "asc";
+      } else {
+        showsSort.key = key;
+        showsSort.dir = "asc";
+      }
+      updateShowsSortHeaderUI();
+      renderShows();
+    });
 
     document.getElementById("btn-add-show").addEventListener("click", () => {
       setAddShowTab("site");
