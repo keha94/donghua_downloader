@@ -59,14 +59,45 @@ def sanitize_path_component(s: str, *, max_len: int = 200) -> str:
     return out or "Unknown"
 
 
+_WS_COLLAPSE = re.compile(r"\s+")
+
+
+def normalize_series_slug(name: str, *, max_len: int = 200) -> str:
+    """
+    Folder / filename prefix derived from the show title when not using Skyhook.
+
+    Spaces are kept between words (no dotted ``Thing.Show`` spelling); path-illegal
+    characters are removed and runs of whitespace collapsed.
+    """
+    if not name or not str(name).strip():
+        return "Unknown"
+    out = "".join(
+        c for c in str(name).strip() if c not in '<>:"/\\|?\n\r\t\x00'
+    )
+    out = _WS_COLLAPSE.sub(" ", out).strip(" .")
+    if len(out) > max_len:
+        out = out[: max_len - 1].rstrip() + "…"
+    return out or "Unknown"
+
+
+def episode_slug_prefix(series_slug: str, season_zero_padded: str) -> str:
+    """
+    Legacy layout filename stem before the episode digits, e.g.
+    ``season_zero_padded`` ``01`` → ``… S01E`` plus ``01`` → ``… S01E01.mp4``.
+    """
+    base = normalize_series_slug(series_slug)
+    return f"{base} S{str(season_zero_padded).strip()}E"
+
+
 def parse_scraped_season_number(season_field: str) -> Optional[int]:
-    """Parse ``Season.05`` / ``season 3`` → int."""
-    m = re.search(r"Season\.(\d+)", season_field or "", re.IGNORECASE)
+    """Parse ``Season 05`` / ``Season.05`` (legacy) / trailing digits → int."""
+    raw = season_field or ""
+    m = re.search(r"Season[\s._-]*(\d+)", raw, re.IGNORECASE)
     if m:
         return int(m.group(1))
-    m2 = re.search(r"(\d+)", season_field or "")
-    if m2:
-        return int(m2.group(1))
+    t = str(raw).strip()
+    if t.isdigit():
+        return int(t)
     return None
 
 
@@ -252,17 +283,20 @@ def match_episode_record(
     """
     Map site episode index to metadata:
 
-    1. ``absoluteNumber == site_ep_num``
-    2. Scraped season + ``number == site_ep_num`` (in-season index)
+    When the show entry sets a season (e.g. ``Season 02``), use TVDB
+    ``seasonNumber`` + in-episode ``number`` *before* ``absoluteNumber``.
+    Otherwise ``absoluteNumber == site_ep_num`` can pick the wrong season
+    (e.g. abs 22 = S1E22 while the site meant S2E22).
+
+    1. If ``scraped_season`` is set: that season + ``number == site_ep_num``
+    2. ``absoluteNumber == site_ep_num``
     3. Default order (season, episode, id)
     """
     sn = site_ep_num
-    for ep in episodes:
-        absn = ep.get("absoluteNumber")
-        if absn is not None and int(absn) == sn:
-            return ep
 
-    if scraped_season is not None:
+    def _match_scraped_season_episode() -> Optional[dict[str, Any]]:
+        if scraped_season is None:
+            return None
         for ep in episodes:
             try:
                 s_num = int(
@@ -275,6 +309,16 @@ def match_episode_record(
                 continue
             if s_num == int(scraped_season) and e_num == sn:
                 return ep
+        return None
+
+    hit = _match_scraped_season_episode()
+    if hit is not None:
+        return hit
+
+    for ep in episodes:
+        absn = ep.get("absoluteNumber")
+        if absn is not None and int(absn) == sn:
+            return ep
 
     def _snum(e: dict[str, Any]) -> int:
         v = e.get("seasonNumber")

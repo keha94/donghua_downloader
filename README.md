@@ -97,13 +97,13 @@ Example layout:
 
 ```text
 ├── Donghua/
-│   ├── Battle.Through.The.Heavens/
-│   │   └── Season.05/
-│   │       ├── Battle.Through.The.Heavens.S05E138.mp4
+│   ├── Battle Through The Heavens/
+│   │   └── Season 05/
+│   │       ├── Battle Through The Heavens S05E138.mp4
 │   │       └── ...
-│   └── Renegade.Immortal/
-│       └── Season.01/
-│           └── Renegade.Immortal.S01E072.mp4
+│   └── Renegade Immortal/
+│       └── Season 01/
+│           └── Renegade Immortal S01E072.mp4
 ```
 
 Add shows (via **Add show** → modal), edit `last_ep`, and remove entries **in the web UI**. Use **Run full downloader** to run `run_downloads()` (RSS poll + site scraping + downloads) in a background thread. Use **RSS import pending** to run only the pending-import pass (`run_rss_pending_import_pass`) — same logic as the periodic RSS import job. Logs go to the **Activity log**. At most one full downloader job and one RSS import job at a time (they may run together). Enable **Debug logging** in the UI (or set **`debug`** in `config.json`) for extra RSS diagnostics when nothing matches.
@@ -223,8 +223,8 @@ If you change the downloads mount path, update `base_folder_download` in `config
 ➡️ Episode 151 - Page: https://animexin.dev/throne-of-seal-episode-151-indonesia-english-sub/
 🔍 Navigating to: https://www.mediafire.com/file/.../file
 ✅ Found direct link: https://download....mp4
-.../Throne.of.Seal/Season.01/Throne.of.Seal.S01E151.mp4: 100%|████| 490M/490M [00:40<00:00, 12.2MB/s]
-✅ Downloaded: Throne.of.Seal.S01E151.mp4
+.../Throne of Seal/Season 01/Throne of Seal S01E151.mp4: 100%|████| 490M/490M [00:40<00:00, 12.2MB/s]
+✅ Downloaded: Throne of Seal S01E151.mp4
 
 💾 Config updated!
 ```

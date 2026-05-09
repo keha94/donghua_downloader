@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import os
 import re
@@ -27,7 +26,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from filelock import FileLock
 from pydantic import BaseModel, Field, field_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,20 +35,24 @@ if str(REPO_ROOT) not in sys.path:
 from downloader import (  # noqa: E402
     create_config_from_link,
     create_rss_show_entry,
+    load_config as load_config_file,
     normalize_legacy_show_entry,
     run_downloads,
+    save_config as save_config_file,
     set_download_progress_hook,
     set_torrent_progress_hook,
-    write_config_json,
 )
 from rss_qbittorrent import (
     poll_all_shows_rss_torrent_gui_progress,
     run_rss_pending_import_pass,
 )
-from tvdb_naming import folder_series_for_show  # noqa: E402
+from tvdb_naming import (  # noqa: E402
+    episode_slug_prefix,
+    folder_series_for_show,
+    normalize_series_slug,
+)
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", REPO_ROOT / "config.json")).resolve()
-LOCK_PATH = str(CONFIG_PATH) + ".lock"
 
 _log_lines: deque[str] = deque(maxlen=500)
 _log_lock = threading.Lock()
@@ -107,80 +109,110 @@ _rss_import_state: dict[str, Any] = {
 _rss_import_thread: Optional[threading.Thread] = None
 
 _episode_progress_lock = threading.Lock()
-_episode_progress: dict[str, Any] = {
-    "active": False,
-    "source": None,
-    "show_link": None,
-    "show_name": None,
-    "series": None,
-    "episode": None,
-    "filename": None,
-    "downloaded": 0,
-    "total": 0,
-    "_t0": None,
-    "dlspeed": 0,
-    "torrent_state": None,
-    "torrent_eta": None,
-}
+_episode_progress_items: dict[str, dict[str, Any]] = {}
+
+
+def _http_progress_key(ev: dict[str, Any]) -> str:
+    show = str(
+        ev.get("show_link")
+        or ev.get("show_name")
+        or ev.get("series")
+        or "show"
+    ).strip()
+    ep = str(ev.get("episode") or "")
+    fn = str(ev.get("filename") or "")
+    return f"http:{show}:{ep}:{fn}".lower()
+
+
+def _torrent_progress_key(ev: dict[str, Any]) -> str:
+    h = str(ev.get("info_hash") or "").strip().lower()
+    if h:
+        return f"torrent:{h}"
+    show = str(ev.get("show_name") or "show").strip()
+    ep = str(ev.get("episode") or "")
+    fn = str(ev.get("filename") or "")
+    return f"torrent:{show}:{ep}:{fn}".lower()
+
+
+def _serialize_progress_item(item: dict[str, Any]) -> dict[str, Any]:
+    active = bool(item.get("active"))
+    source = item.get("source")
+    downloaded = int(item.get("downloaded") or 0)
+    total = int(item.get("total") or 0)
+    qbit_dl = int(item.get("dlspeed") or 0)
+    t0 = item.get("_t0")
+
+    speed_bps = 0
+    if active:
+        if source == "torrent" and qbit_dl > 0:
+            speed_bps = qbit_dl
+        elif t0 is not None and downloaded > 0:
+            speed_bps = int(downloaded / max(time.monotonic() - float(t0), 1e-6))
+
+    body: dict[str, Any] = {
+        "id": str(item.get("id") or ""),
+        "active": active,
+        "source": source,
+        "show_link": item.get("show_link"),
+        "show_name": item.get("show_name"),
+        "series": item.get("series"),
+        "episode": item.get("episode"),
+        "filename": item.get("filename"),
+        "downloaded": downloaded,
+        "total": total,
+        "speed_bps": speed_bps,
+        "torrent_state": item.get("torrent_state"),
+        "torrent_eta": item.get("torrent_eta"),
+    }
+    if active:
+        if total > 0:
+            body["percent"] = min(100.0, 100.0 * downloaded / total)
+            body["indeterminate"] = False
+        else:
+            body["percent"] = None
+            body["indeterminate"] = True
+    else:
+        body["percent"] = None
+        body["indeterminate"] = False
+    return body
 
 
 def _reset_episode_download_progress() -> None:
     with _episode_progress_lock:
-        _episode_progress.update(
-            {
-                "active": False,
-                "source": None,
-                "show_link": None,
-                "show_name": None,
-                "series": None,
-                "episode": None,
-                "filename": None,
-                "downloaded": 0,
-                "total": 0,
-                "_t0": None,
-                "dlspeed": 0,
-                "torrent_state": None,
-                "torrent_eta": None,
-            }
-        )
+        _episode_progress_items.clear()
 
 
 def _on_download_file_event(ev: dict[str, Any]) -> None:
     kind = ev.get("kind")
+    key = _http_progress_key(ev)
     with _episode_progress_lock:
         if kind == "file_start":
-            _episode_progress.update(
-                {
-                    "active": True,
-                    "source": "http",
-                    "show_link": ev.get("show_link"),
-                    "show_name": ev.get("show_name"),
-                    "series": ev.get("series"),
-                    "episode": ev.get("episode"),
-                    "filename": ev.get("filename"),
-                    "downloaded": 0,
-                    "total": int(ev.get("total") or 0),
-                    "_t0": time.monotonic(),
-                    "dlspeed": 0,
-                    "torrent_state": None,
-                    "torrent_eta": None,
-                }
-            )
+            _episode_progress_items[key] = {
+                "id": key,
+                "active": True,
+                "source": "http",
+                "show_link": ev.get("show_link"),
+                "show_name": ev.get("show_name"),
+                "series": ev.get("series"),
+                "episode": ev.get("episode"),
+                "filename": ev.get("filename"),
+                "downloaded": 0,
+                "total": int(ev.get("total") or 0),
+                "_t0": time.monotonic(),
+                "dlspeed": 0,
+                "torrent_state": None,
+                "torrent_eta": None,
+            }
         elif kind == "file_progress":
-            if not _episode_progress.get("active"):
+            item = _episode_progress_items.get(key)
+            if not item:
                 return
-            _episode_progress["downloaded"] = int(ev.get("downloaded") or 0)
-            _episode_progress["total"] = int(ev.get("total") or 0)
+            item["downloaded"] = int(ev.get("downloaded") or 0)
+            item["total"] = int(ev.get("total") or 0)
         elif kind == "file_complete":
-            _episode_progress["downloaded"] = int(ev.get("downloaded") or 0)
-            _episode_progress["total"] = int(ev.get("total") or 0)
-            _episode_progress["active"] = False
-            _episode_progress["_t0"] = None
-            _episode_progress["source"] = None
+            _episode_progress_items.pop(key, None)
         elif kind == "file_error":
-            _episode_progress["active"] = False
-            _episode_progress["_t0"] = None
-            _episode_progress["source"] = None
+            _episode_progress_items.pop(key, None)
 
     if kind == "file_start":
         log.info(
@@ -191,26 +223,47 @@ def _on_download_file_event(ev: dict[str, Any]) -> None:
 
 
 def _on_torrent_progress_event(ev: dict[str, Any]) -> None:
-    if ev.get("kind") != "torrent_progress":
+    kind = str(ev.get("kind") or "")
+    if kind == "torrent_snapshot":
+        active_hashes = {
+            str(h).strip().lower()
+            for h in (ev.get("active_hashes") or [])
+            if str(h).strip()
+        }
+        with _episode_progress_lock:
+            stale = [
+                key
+                for key, item in _episode_progress_items.items()
+                if item.get("source") == "torrent"
+                and not (
+                    key.startswith("torrent:")
+                    and key.removeprefix("torrent:") in active_hashes
+                )
+            ]
+            for key in stale:
+                _episode_progress_items.pop(key, None)
         return
+    if kind != "torrent_progress":
+        return
+    key = _torrent_progress_key(ev)
     with _episode_progress_lock:
-        _episode_progress.update(
-            {
-                "active": True,
-                "source": "torrent",
-                "show_link": None,
-                "show_name": ev.get("show_name"),
-                "series": ev.get("show_name"),
-                "episode": ev.get("episode"),
-                "filename": ev.get("filename"),
-                "downloaded": int(ev.get("downloaded") or 0),
-                "total": int(ev.get("total") or 0),
-                "_t0": _episode_progress.get("_t0") or time.monotonic(),
-                "dlspeed": int(ev.get("dlspeed") or 0),
-                "torrent_state": ev.get("state"),
-                "torrent_eta": ev.get("eta"),
-            }
-        )
+        existing = _episode_progress_items.get(key) or {}
+        _episode_progress_items[key] = {
+            "id": key,
+            "active": True,
+            "source": "torrent",
+            "show_link": None,
+            "show_name": ev.get("show_name"),
+            "series": ev.get("show_name"),
+            "episode": ev.get("episode"),
+            "filename": ev.get("filename"),
+            "downloaded": int(ev.get("downloaded") or 0),
+            "total": int(ev.get("total") or 0),
+            "_t0": existing.get("_t0") or time.monotonic(),
+            "dlspeed": int(ev.get("dlspeed") or 0),
+            "torrent_state": ev.get("state"),
+            "torrent_eta": ev.get("eta"),
+        }
     h = str(ev.get("info_hash") or "")
     log.debug(
         "[torrent-ui] hook %s EP%s %.1f%% state=%s bytes=%s/%s hash=%s…",
@@ -227,25 +280,15 @@ def _on_torrent_progress_event(ev: dict[str, Any]) -> None:
 def _clear_torrent_progress_ui_state() -> bool:
     """Hide torrent row when nothing is actively downloading (poller found no jobs)."""
     with _episode_progress_lock:
-        if _episode_progress.get("source") != "torrent":
+        torrent_keys = [
+            key
+            for key, item in _episode_progress_items.items()
+            if item.get("source") == "torrent"
+        ]
+        if not torrent_keys:
             return False
-        _episode_progress.update(
-            {
-                "active": False,
-                "source": None,
-                "show_link": None,
-                "show_name": None,
-                "series": None,
-                "episode": None,
-                "filename": None,
-                "downloaded": 0,
-                "total": 0,
-                "_t0": None,
-                "dlspeed": 0,
-                "torrent_state": None,
-                "torrent_eta": None,
-            }
-        )
+        for key in torrent_keys:
+            _episode_progress_items.pop(key, None)
         return True
 
 
@@ -557,7 +600,6 @@ async def _log_unhandled_exception(request: Request, exc: Exception) -> JSONResp
 
 def _default_config() -> dict[str, Any]:
     return {
-        "last_run": 0,
         "base_folder_download": str(REPO_ROOT / "downloads"),
         "test": False,
         "headless": True,
@@ -573,7 +615,6 @@ def _default_config() -> dict[str, Any]:
             "tag_prefix": "donghua",
         },
         "list": [],
-        "disabled": [],
     }
 
 
@@ -584,14 +625,11 @@ def _ensure_config_shape(data: dict[str, Any]) -> dict[str, Any]:
         base["list"] = []
     else:
         base["list"] = data["list"]
-    if "disabled" in data and isinstance(data["disabled"], list):
-        base["disabled"] = data["disabled"]
     qb_def = dict(base["qbittorrent"] or {})
     if isinstance(data.get("qbittorrent"), dict):
         qb_def.update(data["qbittorrent"])
         base["qbittorrent"] = qb_def
     for key in (
-        "last_run",
         "base_folder_download",
         "test",
         "headless",
@@ -613,18 +651,13 @@ def normalize_link(link: str) -> str:
 
 
 def load_config() -> dict[str, Any]:
-    lock = FileLock(LOCK_PATH, timeout=60)
-    with lock:
-        if not CONFIG_PATH.is_file():
-            return _default_config()
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            return _ensure_config_shape(json.load(f))
+    if not CONFIG_PATH.is_file():
+        return _default_config()
+    return _ensure_config_shape(load_config_file(str(CONFIG_PATH)))
 
 
 def save_config(config: dict[str, Any]) -> None:
-    lock = FileLock(LOCK_PATH, timeout=60)
-    with lock:
-        write_config_json(str(CONFIG_PATH), config)
+    save_config_file(config, str(CONFIG_PATH))
 
 
 def find_entry_by_link(
@@ -661,6 +694,47 @@ def find_entry_by_feed_url(
     return None
 
 
+def _season_number_from_any(value: Any, default: Optional[int] = None) -> int:
+    """Parse season input from int or strings like ``Season 02`` / ``Season.02`` (legacy) / ``2``."""
+    if value is None:
+        if default is not None:
+            return int(default)
+        raise ValueError("season is required")
+    if isinstance(value, int):
+        if value >= 1:
+            return int(value)
+        raise ValueError("season must be >= 1")
+    s = str(value).strip()
+    if not s:
+        if default is not None:
+            return int(default)
+        raise ValueError("season is required")
+    if s.isdigit():
+        n = int(s)
+        if n >= 1:
+            return n
+        raise ValueError("season must be >= 1")
+    m = re.search(r"Season\D*(\d+)", s, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        if n >= 1:
+            return n
+    raise ValueError("season must be a positive integer or 'Season NN'")
+
+
+def _apply_season_to_show_entry(
+    entry: dict[str, Any], season_raw: Optional[Any]
+) -> None:
+    """Set normalized ``season`` and sync ``ep`` prefix slug."""
+    if season_raw is None:
+        return
+    sn = _season_number_from_any(season_raw)
+    entry["season"] = f"Season {sn:02d}"
+    slug = normalize_series_slug(str(entry.get("series") or ""))
+    entry["series"] = slug
+    entry["ep"] = episode_slug_prefix(slug, f"{sn:02d}")
+
+
 class AddShowBody(BaseModel):
     link: str = Field(..., min_length=1)
     last_ep: int = Field(0, ge=0)
@@ -678,7 +752,7 @@ class UpdateShowBody(BaseModel):
     last_ep: Optional[int] = Field(None, ge=0)
     link: Optional[str] = None
     thetvdb_id: Optional[int] = None
-    season: Optional[str] = None
+    season: Optional[int] = Field(None, ge=1)
     show_name_regex: Optional[str] = None
     episode_regex: Optional[str] = None
 
@@ -689,13 +763,20 @@ class UpdateShowBody(BaseModel):
             raise ValueError("thetvdb_id must be >= 1")
         return v
 
+    @field_validator("season", mode="before")
+    @classmethod
+    def _season_update(cls, v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        return _season_number_from_any(v)
+
 
 class AddRssShowBody(BaseModel):
     name: str = Field(..., min_length=1)
     rss_url: str = Field(..., min_length=1)
     thetvdb_id: int = Field(..., ge=1)
     last_ep: int = Field(0, ge=0)
-    season: str = Field("Season.01", min_length=1)
+    season: int = Field(1, ge=1)
     show_name_regex: Optional[str] = None
     episode_regex: Optional[str] = None
 
@@ -706,6 +787,11 @@ class AddRssShowBody(BaseModel):
         if not s:
             raise ValueError("rss_url is required")
         return s
+
+    @field_validator("season", mode="before")
+    @classmethod
+    def _season_add_rss(cls, v: Any) -> int:
+        return _season_number_from_any(v, default=1)
 
 
 class SettingsPatchBody(BaseModel):
@@ -772,6 +858,7 @@ async def list_shows() -> JSONResponse:
                 "season": show.get("season", ""),
                 "ep_prefix": show.get("ep", ""),
                 "last_ep": show.get("last_ep", 0),
+                "last_downloaded_at": show.get("last_downloaded_at"),
                 "missing_ep": show.get("missing_ep") or [],
                 "thetvdb_id": show.get("thetvdb_id"),
                 "show_name_regex": show.get("show_name_regex"),
@@ -836,7 +923,7 @@ async def add_rss_show(body: AddRssShowBody) -> JSONResponse:
             rss_url=body.rss_url.strip(),
             thetvdb_id=body.thetvdb_id,
             last_ep=body.last_ep,
-            season=body.season.strip(),
+            season=body.season,
             show_name_regex=body.show_name_regex,
             episode_regex=body.episode_regex,
         )
@@ -909,13 +996,7 @@ async def update_show(index: int, body: UpdateShowBody) -> JSONResponse:
                     )
                 current["thetvdb_id"] = body.thetvdb_id
             if body.season is not None:
-                s = str(body.season).strip()
-                if s:
-                    current["season"] = s
-                    sm = re.search(r"Season\.(\d+)", s, re.IGNORECASE)
-                    sn = int(sm.group(1)) if sm else 1
-                    slug = str(current.get("series") or "")
-                    current["ep"] = f"{slug}.S{sn:02d}E"
+                _apply_season_to_show_entry(current, body.season)
             if "show_name_regex" in body.model_fields_set:
                 v = body.show_name_regex
                 current["show_name_regex"] = (
@@ -969,6 +1050,8 @@ async def update_show(index: int, body: UpdateShowBody) -> JSONResponse:
             elif current.get("thetvdb_id") is not None:
                 new_entry["thetvdb_id"] = current["thetvdb_id"]
             config["list"][index] = new_entry
+            if body.season is not None:
+                _apply_season_to_show_entry(new_entry, body.season)
         else:
             if body.last_ep is not None:
                 current["last_ep"] = body.last_ep
@@ -977,6 +1060,8 @@ async def update_show(index: int, body: UpdateShowBody) -> JSONResponse:
                     current.pop("thetvdb_id", None)
                 else:
                     current["thetvdb_id"] = body.thetvdb_id
+            if body.season is not None:
+                _apply_season_to_show_entry(current, body.season)
             config["list"][index] = current
     except HTTPException:
         raise
@@ -1049,51 +1134,42 @@ async def start_rss_import() -> JSONResponse:
 @app.get("/api/download/progress")
 async def download_episode_progress() -> JSONResponse:
     with _episode_progress_lock:
-        active = bool(_episode_progress.get("active"))
-        source = _episode_progress.get("source")
-        show_link = _episode_progress.get("show_link")
-        show_name = _episode_progress.get("show_name")
-        series = _episode_progress.get("series")
-        episode = _episode_progress.get("episode")
-        filename = _episode_progress.get("filename")
-        downloaded = int(_episode_progress.get("downloaded") or 0)
-        total = int(_episode_progress.get("total") or 0)
-        t0 = _episode_progress.get("_t0")
-        qbit_dl = int(_episode_progress.get("dlspeed") or 0)
-        torrent_state = _episode_progress.get("torrent_state")
-        torrent_eta = _episode_progress.get("torrent_eta")
+        progress_items = list(_episode_progress_items.values())
 
-    speed_bps = 0
-    if active:
-        if source == "torrent" and qbit_dl > 0:
-            speed_bps = qbit_dl
-        elif t0 is not None and downloaded > 0:
-            speed_bps = int(downloaded / max(time.monotonic() - float(t0), 1e-6))
+    items = [_serialize_progress_item(item) for item in progress_items if item.get("active")]
+    def _episode_sort_value(raw: Any) -> int:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
 
+    items.sort(
+        key=lambda p: (
+            str(p.get("show_name") or p.get("series") or ""),
+            _episode_sort_value(p.get("episode")),
+            str(p.get("id") or ""),
+        )
+    )
+    active = bool(items)
+    primary = items[0] if items else {}
     body: dict[str, Any] = {
         "active": active,
-        "source": source,
-        "show_link": show_link,
-        "show_name": show_name,
-        "series": series,
-        "episode": episode,
-        "filename": filename,
-        "downloaded": downloaded,
-        "total": total,
-        "speed_bps": speed_bps,
-        "torrent_state": torrent_state,
-        "torrent_eta": torrent_eta,
+        "items": items,
+        "active_count": len(items),
+        "source": primary.get("source"),
+        "show_link": primary.get("show_link"),
+        "show_name": primary.get("show_name"),
+        "series": primary.get("series"),
+        "episode": primary.get("episode"),
+        "filename": primary.get("filename"),
+        "downloaded": primary.get("downloaded", 0),
+        "total": primary.get("total", 0),
+        "speed_bps": primary.get("speed_bps", 0),
+        "torrent_state": primary.get("torrent_state"),
+        "torrent_eta": primary.get("torrent_eta"),
+        "percent": primary.get("percent"),
+        "indeterminate": bool(primary.get("indeterminate", False)),
     }
-    if active:
-        if total > 0:
-            body["percent"] = min(100.0, 100.0 * downloaded / total)
-            body["indeterminate"] = False
-        else:
-            body["percent"] = None
-            body["indeterminate"] = True
-    else:
-        body["percent"] = None
-        body["indeterminate"] = False
     return JSONResponse(body)
 
 

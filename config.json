@@ -1,51 +1,15 @@
 {
-    "last_run": 0,
     "base_folder_download": "/downloads",
     "test": false,
     "headless": true,
     "skyhook_base_url": "",
     "skyhook_language": "en",
     "thetvdb_include_episode_title": true,
-    "debug": false,
     "qbittorrent": {
         "host": "127.0.0.1",
         "port": 8080,
         "username": "",
         "password": "",
         "tag_prefix": "donghua"
-    },
-    "list": [
-        {
-            "name": "Coiling Dragon",
-            "link": "https://animexin.dev/coiling-dragon/",
-            "series": "Coiling.Dragon",
-            "season": "Season.01",
-            "ep": "Coiling.Dragon.S01E",
-            "last_ep": 4,
-            "missing_ep": []
-        },
-        {
-            "type": "rss_qbittorrent",
-            "name": "Sword of Coming 2",
-            "link": "https://nyaa.si/?page=rss&q=%22sword+of+coming+2%22&c=1_2&f=0",
-            "rss_url": "https://nyaa.si/?page=rss&q=%22sword+of+coming+2%22&c=1_2&f=0",
-            "thetvdb_id": 452275,
-            "series": "Sword.of.Coming.2",
-            "season": "Season.02",
-            "ep": "Sword.of.Coming.2.S02E",
-            "last_ep": 20,
-            "missing_ep": [],
-            "rss_torrent_jobs": [
-                {
-                    "hash": "ff0e4998295f79b3d5cf5f922552a8fd777f6e4d",
-                    "episode": 21,
-                    "item_title": "[FSP DN] Jian Lai 2 (Sword of Coming 2) - 21 [4K] | 剑来",
-                    "source": "https://nyaa.si/view/2104994"
-                }
-            ],
-            "show_name_regex": "\\[FSP DN\\].*Sword of Coming (?:2|S02)",
-            "episode_regex": "- (\\d+)"
-        }
-    ],
-    "disabled": []
+    }
 }

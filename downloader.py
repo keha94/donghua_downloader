@@ -5,6 +5,8 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -45,8 +47,10 @@ from playwright.sync_api import sync_playwright
 from rss_qbittorrent import process_rss_qbittorrent_show, run_rss_pending_import_pass
 from tvdb_naming import (
     episode_filename,
+    episode_slug_prefix,
     get_cached_series_data,
     match_episode_record,
+    normalize_series_slug,
     parse_scraped_season_number,
     season_folder_name,
     series_root_folder,
@@ -85,6 +89,21 @@ def filter_link_episode(series_url: str, last_episode: int) -> dict[str, str]:
     return filtered
 
 
+def _migrate_legacy_dotted_slug_fields(show: dict[str, Any]) -> None:
+    """``Coiling.Dragon`` / ``Thing.Show.S02E`` → spaced titles (still path-safe)."""
+    ser = show.get("series")
+    if isinstance(ser, str) and "." in ser and not re.search(r"\s", ser.strip()):
+        show["series"] = normalize_series_slug(ser.replace(".", " "))
+
+    ep = show.get("ep")
+    if isinstance(ep, str):
+        ep_s = ep.strip()
+        m = re.match(r"(?i)^(.+)\.S(\d{2})E$", ep_s)
+        if m:
+            base_spaced = normalize_series_slug(m.group(1).replace(".", " "))
+            show["ep"] = episode_slug_prefix(base_spaced, m.group(2))
+
+
 def normalize_legacy_show_entry(show: dict[str, Any]) -> None:
     """Migrate legacy ``serie`` / ``saison`` keys to ``series`` / ``season`` (in place)."""
     if "series" not in show and "serie" in show:
@@ -93,6 +112,12 @@ def normalize_legacy_show_entry(show: dict[str, Any]) -> None:
     if "season" not in show and "saison" in show:
         show["season"] = show["saison"]
     show.pop("saison", None)
+    seas = show.get("season")
+    if isinstance(seas, str) and seas.strip():
+        m = re.match(r"(?i)^Season\.(\d+)$", seas.strip())
+        if m:
+            show["season"] = f'Season {int(m.group(1)):02d}'
+    _migrate_legacy_dotted_slug_fields(show)
 
 
 def extract_mediafire_1080p_link(episode_url: str) -> Optional[dict[str, Optional[str]]]:
@@ -316,11 +341,68 @@ def _config_lock_path(path: str) -> str:
     return str(Path(path).resolve()) + ".lock"
 
 
+APP_DATA_KEYS = ("debug", "list")
+
+
+def _app_data_path(config_path: str) -> str:
+    env_path = os.environ.get("APP_DATA_PATH")
+    if env_path:
+        p = Path(env_path)
+        if not p.is_absolute():
+            p = Path(config_path).resolve().parent / p
+        return str(p.resolve())
+    cfg = Path(config_path).resolve()
+    return str(cfg.with_name("app_data.json"))
+
+
+def _default_app_data() -> dict[str, Any]:
+    return {
+        "debug": False,
+        "list": [],
+    }
+
+
+def _read_json_or_default(path: str, default: dict[str, Any]) -> dict[str, Any]:
+    p = Path(path)
+    if not p.is_file():
+        return deepcopy(default)
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return deepcopy(default)
+
+
+def _merge_config_and_app_data(
+    startup_config: dict[str, Any], app_data: dict[str, Any]
+) -> dict[str, Any]:
+    merged = dict(startup_config)
+    merged["debug"] = bool(app_data.get("debug", False))
+    app_list = app_data.get("list")
+    merged["list"] = app_list if isinstance(app_list, list) else []
+    return merged
+
+
+def _split_startup_and_app_data(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    startup = dict(config)
+    app_data = _default_app_data()
+    for key in APP_DATA_KEYS:
+        if key in config:
+            app_data[key] = config[key]
+        startup.pop(key, None)
+    return startup, app_data
+
+
 def load_config(path: str) -> dict[str, Any]:
     lock = FileLock(_config_lock_path(path), timeout=120)
     with lock:
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            startup_config = json.load(f)
+        app_data = _read_json_or_default(_app_data_path(path), _default_app_data())
+    data = _merge_config_and_app_data(startup_config, app_data)
     for show in data.get("list") or []:
         if isinstance(show, dict):
             normalize_legacy_show_entry(show)
@@ -363,7 +445,9 @@ def write_config_json(path: str, config: dict[str, Any]) -> None:
 def save_config(config: dict[str, Any], path: str) -> None:
     lock = FileLock(_config_lock_path(path), timeout=120)
     with lock:
-        write_config_json(path, config)
+        startup_config, app_data = _split_startup_and_app_data(config)
+        write_config_json(path, startup_config)
+        write_config_json(_app_data_path(path), app_data)
 
 
 def create_config_from_link(
@@ -392,16 +476,14 @@ def create_config_from_link(
     # Clean name (remove "Season X")
     name = re.sub(r'[Ss]eason\s*\d+', '', full_title).strip()
 
-    # Normalize for file-friendly identifiers
-    normalized = re.sub(r"[^\w]", ".", name).strip(".")
-    normalized = re.sub(r"\.+", ".", normalized)  # Replace multiple dots
+    series_slug = normalize_series_slug(name)
 
     return {
         "name": name,
         "link": link,
-        "series": normalized,
-        "season": f"Season.{season_str}",
-        "ep": f"{normalized}.S{season_str}E",
+        "series": series_slug,
+        "season": f"Season {season_str}",
+        "ep": episode_slug_prefix(series_slug, season_str),
         "last_ep": last_ep,
         "missing_ep": missing_ep
     }
@@ -414,7 +496,7 @@ def create_rss_show_entry(
     thetvdb_id: int,
     last_ep: int = 0,
     missing_ep: Optional[list[Any]] = None,
-    season: str = "Season.01",
+    season: int | str = 1,
     show_name_regex: Optional[str] = None,
     episode_regex: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -429,13 +511,18 @@ def create_rss_show_entry(
     if not u:
         raise ValueError("RSS URL is required.")
 
-    season_clean = str(season).strip() or "Season.01"
-    season_match = re.search(r"Season\.(\d+)", season_clean, re.IGNORECASE)
-    season_number = int(season_match.group(1)) if season_match else 1
+    season_raw = str(season).strip()
+    if isinstance(season, int):
+        season_number = int(season) if int(season) >= 1 else 1
+    elif season_raw.isdigit():
+        season_number = int(season_raw) if int(season_raw) >= 1 else 1
+    else:
+        season_match = re.search(r"Season\D*(\d+)", season_raw, re.IGNORECASE)
+        season_number = int(season_match.group(1)) if season_match else 1
     season_str = f"{season_number:02d}"
+    season_clean = f"Season {season_str}"
 
-    normalized = re.sub(r"[^\w]", ".", nm).strip(".")
-    normalized = re.sub(r"\.+", ".", normalized)
+    series_slug = normalize_series_slug(nm)
 
     snr = (
         str(show_name_regex).strip()
@@ -454,9 +541,9 @@ def create_rss_show_entry(
         "link": u,
         "rss_url": u,
         "thetvdb_id": int(thetvdb_id),
-        "series": normalized,
+        "series": series_slug,
         "season": season_clean,
-        "ep": f"{normalized}.S{season_str}E",
+        "ep": episode_slug_prefix(series_slug, season_str),
         "last_ep": int(last_ep),
         "missing_ep": list(missing_ep),
         "rss_torrent_jobs": [],
@@ -618,6 +705,7 @@ def run_downloads(config_path: str = "config.json") -> None:
                     )
                     print(f"✅ Downloaded: {filename}")
                     show["last_ep"] = ep_num  # Update last successfully downloaded
+                    show["last_downloaded_at"] = datetime.now(timezone.utc).isoformat()
                     save_config(config, cfg_path)
                     print("\n💾 Config updated!")
                 else:

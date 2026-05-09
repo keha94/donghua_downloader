@@ -316,6 +316,12 @@ input:focus {
   gap: 0.65rem;
 }
 
+.download-progress-active + .download-progress-active {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
 .download-progress-show-title {
   margin: 0;
   font-size: 1rem;
@@ -383,6 +389,11 @@ input:focus {
   white-space: nowrap;
 }
 
+.shows-table .downloaded-at {
+  white-space: nowrap;
+  font-size: 0.83rem;
+}
+
 .shows-table .link a {
   color: var(--accent);
   text-decoration: none;
@@ -390,6 +401,23 @@ input:focus {
 
 .shows-table .link a:hover {
   text-decoration: underline;
+}
+
+.shows-table .show-link-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.shows-table .show-link-icon:hover {
+  border-color: var(--muted);
+  text-decoration: none;
 }
 
 .shows-table .actions {
@@ -456,6 +484,14 @@ input:focus {
   gap: 0.45rem;
 }
 
+.dialog-inner.form-grid label .dialog-season-note {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  font-weight: 400;
+}
+
 .dialog-inner.form-grid input[type="url"],
 .dialog-inner.form-grid input[type="number"],
 .dialog-inner.form-grid input[type="text"] {
@@ -465,8 +501,10 @@ input:focus {
   border-color: #323946;
 }
 
+/* RSS-only (regex matching). Hidden for site/animexin shows — do not rely on `[hidden]` alone
+   (`display:flex` in author styles can override UA hidden rules in some browsers). */
 .edit-rss-extra {
-  display: flex;
+  display: none !important;
   flex-direction: column;
   gap: 0.9rem;
   margin: 0;
@@ -474,6 +512,10 @@ input:focus {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
+}
+
+.edit-rss-extra.is-visible {
+  display: flex !important;
 }
 
 .edit-rss-extra label {

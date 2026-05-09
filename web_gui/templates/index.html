@@ -54,6 +54,7 @@
               <th>Folder</th>
               <th>Season</th>
               <th>Last EP</th>
+              <th>Last Download</th>
               <th>qBit</th>
               <th>Link</th>
               <th></th>
@@ -115,11 +116,12 @@
         <span id="edit-tvdb-label-text">TheTVDB ID (optional)</span>
         <input type="number" name="thetvdb_id" min="1" step="1" placeholder="Leave empty to use title-based names" autocomplete="off" />
       </label>
-      <div id="edit-rss-extra" class="edit-rss-extra" role="group" aria-label="RSS feed matching options" hidden>
-        <label>
-          Season (for episode mapping)
-          <input type="text" name="season" id="edit-season" placeholder="Season.01" autocomplete="off" />
-        </label>
+      <label class="dialog-field-full">
+        Season number (for episode mapping)
+        <input type="number" name="season" id="edit-season" min="1" step="1" value="1" required />
+        <small class="muted dialog-season-note" id="edit-season-note">When adding or reloading the series page URL, this is set from “Season N” in the page title—not from the URL path.</small>
+      </label>
+      <div id="edit-rss-extra" class="edit-rss-extra" role="group" aria-label="RSS-only title and episode regex options">
         <label>
           Show name regex <span class="label-optional">(optional)</span>
           <input type="text" name="show_name_regex" id="edit-show_name_regex" placeholder="(?i)…" autocomplete="off" />
@@ -129,7 +131,7 @@
           <input type="text" name="episode_regex" id="edit-episode_regex" placeholder="First capture group = episode number" autocomplete="off" />
         </label>
       </div>
-      <p class="hint muted dialog-edit-hint" id="edit-hint-animexin">Changing the URL reloads title and path fields from the site (same as remove + add); your TheTVDB ID is kept unless you clear it here. With an ID, downloads use Skyhook naming as in Add show; if metadata cannot be loaded, the same site-derived slug naming applies as without an ID.</p>
+      <p class="hint muted dialog-edit-hint" id="edit-hint-animexin">Changing the URL reloads the series name and folder slug from the site (same as remove + add) and resets <strong>season number</strong> using the page heading only: it looks for “Season N”; if absent, season defaults to <code>1</code> (<strong>URL paths</strong> like <code>-season-2-</code> are <strong>not</strong> parsed). Your TheTVDB ID is kept unless you clear it here. With an ID, downloads use Skyhook naming as in Add show; if metadata cannot be loaded, the same site-derived slug naming applies as without an ID.</p>
       <p class="hint muted dialog-edit-hint" id="edit-hint-rss" hidden>For RSS shows, the URL is the feed. TheTVDB ID is required for library naming. Regex fields are optional; omit them to match feed titles against Skyhook’s title and alternate names.</p>
       <div class="dialog-actions">
         <button type="button" class="btn ghost" id="edit-cancel">Cancel</button>
@@ -169,7 +171,7 @@
             TheTVDB ID (optional)
             <input type="number" name="thetvdb_id" min="1" step="1" placeholder="e.g. 412781" autocomplete="off" />
           </label>
-          <p class="hint muted">When set, names come from Sonarr Skyhook (TheTVDB): folder like <code>Series Name (2021)</code>, season folder <code>Season 01</code> (or the season title from TVDB), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming reverts to the site-derived slug (same as when no ID): <code>Your.Show.Slug</code> / <code>Season.01</code> / <code>Your.Show.Slug.S01E01.mp4</code>.</p>
+          <p class="hint muted">On <strong>add</strong>, <strong>Season</strong> is taken from words like “Season 2” in the page title (heading), not from the URL bar; if missing, season is <code>Season 01</code>. Use <strong>Edit</strong> later to fix it after TheTVDB-based naming. When a TheTVDB ID is set, names come from Sonarr Skyhook: folder like <code>Series Name (2021)</code>, season folder <code>Season 01</code> (or the season title from TVDB), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming falls back to the site-derived layout: <code>Your Show Title</code> / <code>Season 01</code> / <code>Your Show Title S01E01.mp4</code>.</p>
           <div class="form-actions">
             <button type="submit" class="btn primary">Add show</button>
           </div>
@@ -195,8 +197,8 @@
             <input type="number" name="last_ep" min="0" value="0" required />
           </label>
           <label>
-            Season (for episode mapping)
-            <input type="text" name="season" value="Season.01" placeholder="Season.01" autocomplete="off" />
+            Season number (for episode mapping)
+            <input type="number" name="season" min="1" step="1" value="1" required />
           </label>
           <label>
             Show name regex (optional)
@@ -275,7 +277,7 @@
       return u.length <= max ? u : u.slice(0, max - 1) + "…";
     }
 
-    let latestEpisodeProgress = { active: false };
+    let latestEpisodeProgress = { active: false, items: [] };
 
     function formatSpeed(bps) {
       const n0 = Number(bps);
@@ -359,30 +361,47 @@
     }
 
     function renderDownloadProgressCard() {
-      const p = latestEpisodeProgress;
-      if (!p.active) {
+      const payload = latestEpisodeProgress || {};
+      const items = Array.isArray(payload.items)
+        ? payload.items
+        : payload.active
+          ? [payload]
+          : [];
+      if (!items.length) {
         downloadProgressSlot.innerHTML =
           '<p class="muted download-progress-idle">No file download in progress.</p>';
         return;
       }
-      const title = p.show_name ? escapeHtml(String(p.show_name)) : "Show";
-      let linkHtml = "";
-      if (p.show_link) {
-        linkHtml =
-          '<p class="muted download-progress-link"><a href="' +
-          escapeAttr(p.show_link) +
-          '" target="_blank" rel="noopener">' +
-          escapeHtml(truncateUrl(p.show_link, 56)) +
-          "</a></p>";
+      const groups = new Map();
+      for (const item of items) {
+        const key = String(item.show_name || "Show") + "||" + String(item.show_link || "");
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(item);
       }
-      downloadProgressSlot.innerHTML =
-        '<div class="download-progress-active">' +
-        '<p class="download-progress-show-title">' +
-        title +
-        "</p>" +
-        linkHtml +
-        renderEpisodeProgressBarMarkup(p) +
-        "</div>";
+      downloadProgressSlot.innerHTML = Array.from(groups.entries())
+        .map(([, groupItems]) => {
+          const first = groupItems[0] || {};
+          const title = first.show_name ? escapeHtml(String(first.show_name)) : "Show";
+          let linkHtml = "";
+          if (first.show_link) {
+            linkHtml =
+              '<p class="muted download-progress-link"><a href="' +
+              escapeAttr(first.show_link) +
+              '" target="_blank" rel="noopener">' +
+              escapeHtml(truncateUrl(first.show_link, 56)) +
+              "</a></p>";
+          }
+          return (
+            '<div class="download-progress-active">' +
+            '<p class="download-progress-show-title">' +
+            title +
+            "</p>" +
+            linkHtml +
+            groupItems.map((entry) => renderEpisodeProgressBarMarkup(entry)).join("") +
+            "</div>"
+          );
+        })
+        .join("");
     }
 
     async function refreshEpisodeProgress() {
@@ -399,9 +418,57 @@
       return "Site";
     }
 
+    function formatBrowserDateTime(iso, withSeconds = false) {
+      if (!iso) return "—";
+      const dt = new Date(iso);
+      if (!Number.isFinite(dt.getTime())) return "—";
+      return dt.toLocaleString([], {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        ...(withSeconds ? { second: "2-digit" } : {}),
+      });
+    }
+
+    function formatDownloadedAt(iso) {
+      if (!iso) return "—";
+      const dt = new Date(iso);
+      if (!Number.isFinite(dt.getTime())) return "—";
+      const nowMs = Date.now();
+      const diffMs = Math.max(0, nowMs - dt.getTime());
+      const hourMs = 60 * 60 * 1000;
+      const dayMs = 24 * hourMs;
+      if (diffMs < hourMs) {
+        return "just now";
+      }
+      if (diffMs < dayMs) {
+        const hours = Math.max(1, Math.floor(diffMs / hourMs));
+        return String(hours) + "h";
+      }
+      const days = Math.floor(diffMs / dayMs);
+      return String(days) + "d";
+    }
+
+    function formatDownloadedAtTooltip(iso) {
+      if (!iso) return "";
+      const dt = new Date(iso);
+      if (!Number.isFinite(dt.getTime())) return "";
+      return dt.toLocaleString([], {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+      });
+    }
+
     function renderShows(shows) {
       if (!shows.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="muted center">No shows yet. Use <strong>Add show</strong> to create one.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="muted center">No shows yet. Use <strong>Add show</strong> to create one.</td></tr>';
         return;
       }
       tbody.innerHTML = shows
@@ -413,8 +480,9 @@
           <td class="mono muted">${escapeHtml(s.folder_series || s.series || "")}</td>
           <td>${escapeHtml(s.season || "")}</td>
           <td class="num">${s.last_ep}</td>
+          <td class="downloaded-at" title="${escapeAttr(formatDownloadedAtTooltip(s.last_downloaded_at))}">${escapeHtml(formatDownloadedAt(s.last_downloaded_at))}</td>
           <td class="num">${s.rss_pending != null && s.rss_pending > 0 ? escapeHtml(String(s.rss_pending)) : "—"}</td>
-          <td class="link"><a href="${escapeAttr(s.link)}" target="_blank" rel="noopener">${escapeHtml(truncateUrl(s.link, 48))}</a></td>
+          <td class="link"><a class="show-link-icon" href="${escapeAttr(s.link)}" target="_blank" rel="noopener" title="${escapeAttr(s.link)}" aria-label="Open show link">🔗</a></td>
           <td class="actions">
             <button type="button" class="btn small ghost btn-edit" data-index="${s.index}">Edit</button>
             <button type="button" class="btn small danger btn-remove" data-index="${s.index}">Remove</button>
@@ -441,7 +509,7 @@
         const data = await api("/api/shows");
         renderShows(data.shows || []);
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="8" class="error center">${escapeHtml(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="error center">${escapeHtml(e.message)}</td></tr>`;
         await refreshLogs();
       }
     }
@@ -490,7 +558,11 @@
       const rss_url = fd.get("rss_url").trim();
       const thetvdb_id = parseInt(fd.get("thetvdb_id"), 10);
       const last_ep = parseInt(fd.get("last_ep"), 10) || 0;
-      const season = (fd.get("season") || "Season.01").trim() || "Season.01";
+      const season = parseInt(fd.get("season"), 10);
+      if (!Number.isInteger(season) || season < 1) {
+        setFlash("Season number must be a positive integer.", "err");
+        return;
+      }
       const snr = fd.get("show_name_regex");
       const erx = fd.get("episode_regex");
       const payload = { name, rss_url, thetvdb_id, last_ep, season };
@@ -501,7 +573,7 @@
         await api("/api/shows/rss", { method: "POST", body: JSON.stringify(payload) });
         ev.target.reset();
         ev.target.querySelector("[name=last_ep]").value = "0";
-        ev.target.querySelector("[name=season]").value = "Season.01";
+        ev.target.querySelector("[name=season]").value = "1";
         dlgAdd.close();
         setFlash("RSS show added.", "ok");
         await refreshLogs();
@@ -573,10 +645,18 @@
         ? "TheTVDB ID (required)"
         : "TheTVDB ID (optional)";
       const rssExtra = document.getElementById("edit-rss-extra");
+      rssExtra.classList.toggle("is-visible", isRss);
       rssExtra.hidden = !isRss;
+      rssExtra.setAttribute("aria-hidden", isRss ? "false" : "true");
       document.getElementById("edit-hint-animexin").hidden = isRss;
       document.getElementById("edit-hint-rss").hidden = !isRss;
-      document.getElementById("edit-season").value = isRss ? (s.season || "Season.01") : "";
+      const seasonRaw = String(s.season || "").trim();
+      const seasonMatch = seasonRaw.match(/(\d+)/);
+      const seasonNum = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
+      document.getElementById("edit-season").value = String(
+        Number.isInteger(seasonNum) && seasonNum >= 1 ? seasonNum : 1
+      );
+      document.getElementById("edit-season-note").hidden = isRss;
       document.getElementById("edit-show_name_regex").value = isRss
         ? (s.show_name_regex || "")
         : "";
@@ -625,11 +705,13 @@
       } else {
         putBody.thetvdb_id = null;
       }
+      const season = parseInt(fd.get("season"), 10);
+      if (!Number.isInteger(season) || season < 1) {
+        setFlash("Season number must be a positive integer.", "err");
+        return;
+      }
+      putBody.season = season;
       if (isRss) {
-        const season = fd.get("season");
-        if (season != null && String(season).trim() !== "") {
-          putBody.season = String(season).trim();
-        }
         const snrx = fd.get("show_name_regex");
         putBody.show_name_regex = snrx != null && String(snrx).trim() !== "" ? String(snrx).trim() : null;
         const eprx = fd.get("episode_regex");
@@ -720,7 +802,9 @@
         if (s.running && s.thread_alive) line = "Running…";
         else if (s.running && !s.thread_alive) line = "Starting…";
         if (s.error) line += " — last error: " + s.error;
-        else if (s.finished_at && !s.running) line = "Idle (last finished " + s.finished_at + ")";
+        else if (s.finished_at && !s.running) {
+          line = "Idle (last finished " + formatBrowserDateTime(s.finished_at, true) + ")";
+        }
         const sec = s.schedule_interval_seconds;
         let sched = "";
         if (sec > 0) {
@@ -742,7 +826,9 @@
         if (s.running && s.thread_alive) line = "Running…";
         else if (s.running && !s.thread_alive) line = "Starting…";
         if (s.error) line += " — last error: " + s.error;
-        else if (s.finished_at && !s.running) line = "Idle (last finished " + s.finished_at + ")";
+        else if (s.finished_at && !s.running) {
+          line = "Idle (last finished " + formatBrowserDateTime(s.finished_at, true) + ")";
+        }
         const sec = s.schedule_interval_seconds;
         let sched = "";
         if (sec > 0) {

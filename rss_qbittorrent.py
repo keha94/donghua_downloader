@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 import shutil
 import time
 from pathlib import Path
@@ -15,8 +16,10 @@ import feedparser
 from tvdb_naming import (
     TVDBSeriesData,
     episode_filename,
+    episode_slug_prefix,
     get_cached_series_data,
     match_episode_record,
+    normalize_series_slug,
     parse_scraped_season_number,
     rss_title_matches_series,
     season_folder_name,
@@ -357,7 +360,7 @@ def _report_pending_torrent_jobs_progress(
     emit_gui_first: bool,
     quiet: bool = False,
 ) -> None:
-    """Log qBittorrent progress for pending jobs; optionally notify GUI for the first job."""
+    """Log qBittorrent progress for pending jobs; optionally notify GUI for active jobs."""
     from downloader import emit_torrent_progress
 
     pending = [
@@ -372,7 +375,7 @@ def _report_pending_torrent_jobs_progress(
             return 0
 
     pending.sort(key=_ep_sort_key)
-    for idx, job in enumerate(pending):
+    for job in pending:
         h = str(job.get("hash") or "").strip().lower()
         try:
             ep_n = int(job.get("episode"))
@@ -406,7 +409,7 @@ def _report_pending_torrent_jobs_progress(
                 f"({_format_bytes(downloaded)}/{_format_bytes(size) if size else '?'}) "
                 f"{_format_bytes(dlspeed)}/s ETA {_format_eta(eta)} [{state}]{tail}"
             )
-        if emit_gui_first and idx == 0:
+        if emit_gui_first:
             emit_torrent_progress(
                 {
                     "kind": "torrent_progress",
@@ -428,7 +431,7 @@ def _report_pending_torrent_jobs_progress(
 def poll_all_shows_rss_torrent_gui_progress(
     config: dict[str, Any],
 ) -> tuple[Optional[bool], str]:
-    """Poll qBittorrent for all RSS shows; emit GUI progress for the first incomplete torrent.
+    """Poll qBittorrent for all RSS shows; emit GUI progress for all incomplete torrents.
 
     Call from the web UI background loop so the progress bar updates while torrents download
     after ``run_downloads()`` has finished (hooks would otherwise be cleared).
@@ -451,6 +454,9 @@ def poll_all_shows_rss_torrent_gui_progress(
     jobs_total = 0
     skipped_missing = 0
     skipped_complete = 0
+
+    active_count = 0
+    active_hashes: list[str] = []
 
     for show in config.get("list") or []:
         if not isinstance(show, dict):
@@ -517,11 +523,20 @@ def poll_all_shows_rss_torrent_gui_progress(
                     "info_hash": h,
                 }
             )
-            return (
-                True,
-                f"emit show={show_name!r} EP{ep_n} {pct:.1f}% state={state!r} "
-                f"hash={h[:8]}… dl={downloaded}/{size} B",
-            )
+            active_count += 1
+            active_hashes.append(h)
+
+    if active_count > 0:
+        emit_torrent_progress(
+            {
+                "kind": "torrent_snapshot",
+                "active_hashes": active_hashes,
+            }
+        )
+        return (
+            True,
+            f"emitted {active_count} active torrent progress update(s) across {rss_show_count} RSS show(s)",
+        )
 
     if rss_show_count == 0:
         return False, "no shows with type rss_qbittorrent/rss in config list"
@@ -564,6 +579,11 @@ def _torrent_is_complete(t: Any) -> bool:
 def _rss_tag(settings: dict[str, Any], show_index: int) -> str:
     prefix = str(settings.get("tag_prefix") or "donghua").strip() or "donghua"
     return f"{prefix}_{show_index}"
+
+
+def _default_ep_slug_prefix(show: dict[str, Any]) -> str:
+    sn = parse_scraped_season_number(str(show.get("season") or "Season 01")) or 1
+    return episode_slug_prefix(str(show.get("series") or ""), f"{sn:02d}")
 
 
 def _add_torrent_and_find_hash(
@@ -620,7 +640,7 @@ def _build_output_paths(
         )
         out = str(Path(base_download) / root_folder / season_folder / filename)
         return out, filename
-    season_str = str(season_field or "Season.01")
+    season_str = str(season_field or "Season 01")
     filename = f"{ep_prefix}{str(ep_num).zfill(2)}.{video_ext.lstrip('.')}"
     out = str(Path(base_download) / series_slug / season_str / filename)
     return out, filename
@@ -785,6 +805,7 @@ def _finish_rss_torrent_jobs_for_show(
                     print(f"⚠️ {name}: moved file but torrent delete failed: {del_exc}")
                 print(f"✅ {name}: EP{ep_j_int} -> {dest.name}")
                 show["last_ep"] = max(int(show.get("last_ep") or 0), ep_j_int)
+                show["last_downloaded_at"] = datetime.now(timezone.utc).isoformat()
                 save_cfg(config, cfg_path)
                 print("💾 Config updated!")
         except Exception as exc:
@@ -859,9 +880,9 @@ def run_rss_pending_import_pass(cfg_path: str) -> None:
         base_path = str(config.get("base_folder_download") or "")
         test_mode = bool(config.get("test"))
         include_ep_title = bool(config.get("thetvdb_include_episode_title", True))
-        series_slug = str(show.get("series") or "")
-        season_field = str(show.get("season") or "Season.01")
-        ep_prefix = str(show.get("ep") or f"{series_slug}.S01E")
+        series_slug = normalize_series_slug(str(show.get("series") or ""))
+        season_field = str(show.get("season") or "Season 01")
+        ep_prefix = str(show.get("ep") or _default_ep_slug_prefix(show))
 
         _finish_rss_torrent_jobs_for_show(
             name=name,
@@ -928,9 +949,9 @@ def process_rss_qbittorrent_show(
     test_mode = bool(config.get("test"))
     include_ep_title = bool(config.get("thetvdb_include_episode_title", True))
     last_ep = int(show.get("last_ep") or 0)
-    series_slug = str(show.get("series") or "")
-    season_field = str(show.get("season") or "Season.01")
-    ep_prefix = str(show.get("ep") or f"{series_slug}.S01E")
+    series_slug = normalize_series_slug(str(show.get("series") or ""))
+    season_field = str(show.get("season") or "Season 01")
+    ep_prefix = str(show.get("ep") or _default_ep_slug_prefix(show))
     show_name_regex = show.get("show_name_regex")
     erregex = show.get("episode_regex")
 
