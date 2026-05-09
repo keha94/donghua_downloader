@@ -3,6 +3,4 @@
 downloads/
 .venv/
 .env
-docker_run.sh
-docker_stop.sh
 app_data.json
