@@ -44,6 +44,11 @@ body {
   font-size: 0.9rem;
 }
 
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
 code {
   font-size: 0.8rem;
   background: var(--surface);

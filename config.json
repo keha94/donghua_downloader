@@ -3,6 +3,19 @@
     "base_folder_download": "/downloads",
     "test": false,
     "headless": true,
-    "list": [],
+    "skyhook_base_url": "",
+    "skyhook_language": "en",
+    "thetvdb_include_episode_title": true,
+    "list": [
+        {
+            "name": "Coiling Dragon",
+            "link": "https://animexin.dev/coiling-dragon/",
+            "series": "Coiling.Dragon",
+            "season": "Season.01",
+            "ep": "Coiling.Dragon.S01E",
+            "last_ep": 3,
+            "missing_ep": []
+        }
+    ],
     "disabled": []
 }

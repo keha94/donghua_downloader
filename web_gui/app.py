@@ -27,7 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from filelock import FileLock
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -35,10 +35,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from downloader import (  # noqa: E402
     create_config_from_link,
+    normalize_legacy_show_entry,
     run_downloads,
     set_download_progress_hook,
     write_config_json,
 )
+from tvdb_naming import folder_series_for_show  # noqa: E402
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", REPO_ROOT / "config.json")).resolve()
 LOCK_PATH = str(CONFIG_PATH) + ".lock"
@@ -93,7 +95,7 @@ _episode_progress: dict[str, Any] = {
     "active": False,
     "show_link": None,
     "show_name": None,
-    "serie": None,
+    "series": None,
     "episode": None,
     "filename": None,
     "downloaded": 0,
@@ -109,7 +111,7 @@ def _reset_episode_download_progress() -> None:
                 "active": False,
                 "show_link": None,
                 "show_name": None,
-                "serie": None,
+                "series": None,
                 "episode": None,
                 "filename": None,
                 "downloaded": 0,
@@ -128,7 +130,7 @@ def _on_download_file_event(ev: dict[str, Any]) -> None:
                     "active": True,
                     "show_link": ev.get("show_link"),
                     "show_name": ev.get("show_name"),
-                    "serie": ev.get("serie"),
+                    "series": ev.get("series"),
                     "episode": ev.get("episode"),
                     "filename": ev.get("filename"),
                     "downloaded": 0,
@@ -334,6 +336,9 @@ def _default_config() -> dict[str, Any]:
         "base_folder_download": str(REPO_ROOT / "downloads"),
         "test": False,
         "headless": True,
+        "skyhook_base_url": "",
+        "skyhook_language": "en",
+        "thetvdb_include_episode_title": True,
         "list": [],
         "disabled": [],
     }
@@ -348,9 +353,20 @@ def _ensure_config_shape(data: dict[str, Any]) -> dict[str, Any]:
         base["list"] = data["list"]
     if "disabled" in data and isinstance(data["disabled"], list):
         base["disabled"] = data["disabled"]
-    for key in ("last_run", "base_folder_download", "test", "headless"):
+    for key in (
+        "last_run",
+        "base_folder_download",
+        "test",
+        "headless",
+        "skyhook_base_url",
+        "skyhook_language",
+        "thetvdb_include_episode_title",
+    ):
         if key in data:
             base[key] = data[key]
+    for show in base.get("list") or []:
+        if isinstance(show, dict):
+            normalize_legacy_show_entry(show)
     return base
 
 
@@ -386,11 +402,27 @@ def find_entry_by_link(
 class AddShowBody(BaseModel):
     link: str = Field(..., min_length=1)
     last_ep: int = Field(0, ge=0)
+    thetvdb_id: Optional[int] = None
+
+    @field_validator("thetvdb_id")
+    @classmethod
+    def _thetvdb_id_add(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 1:
+            raise ValueError("thetvdb_id must be >= 1")
+        return v
 
 
 class UpdateShowBody(BaseModel):
     last_ep: Optional[int] = Field(None, ge=0)
     link: Optional[str] = None
+    thetvdb_id: Optional[int] = None
+
+    @field_validator("thetvdb_id")
+    @classmethod
+    def _thetvdb_id_update(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 1:
+            raise ValueError("thetvdb_id must be >= 1")
+        return v
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -410,16 +442,19 @@ async def list_shows() -> JSONResponse:
     log.info("GET /api/shows -> %d show(s)", n)
     rows: list[dict[str, Any]] = []
     for i, show in enumerate(config["list"]):
+        folder_series = folder_series_for_show(show, config)
         rows.append(
             {
                 "index": i,
                 "name": show.get("name", ""),
                 "link": show.get("link", ""),
-                "serie": show.get("serie", ""),
-                "saison": show.get("saison", ""),
+                "series": show.get("series", ""),
+                "folder_series": folder_series,
+                "season": show.get("season", ""),
                 "ep_prefix": show.get("ep", ""),
                 "last_ep": show.get("last_ep", 0),
                 "missing_ep": show.get("missing_ep") or [],
+                "thetvdb_id": show.get("thetvdb_id"),
             }
         )
     return JSONResponse({"shows": rows})
@@ -427,7 +462,12 @@ async def list_shows() -> JSONResponse:
 
 @app.post("/api/shows")
 async def add_show(body: AddShowBody) -> JSONResponse:
-    log.info("POST /api/shows add link=%r last_ep=%s", body.link.strip(), body.last_ep)
+    log.info(
+        "POST /api/shows add link=%r last_ep=%s thetvdb_id=%s",
+        body.link.strip(),
+        body.last_ep,
+        body.thetvdb_id,
+    )
     config = load_config()
     link = body.link.strip()
     if find_entry_by_link(config["list"], link):
@@ -439,13 +479,15 @@ async def add_show(body: AddShowBody) -> JSONResponse:
     except Exception as e:
         log.error("create_config_from_link failed: %s", e, exc_info=True)
         raise HTTPException(status_code=400, detail=str(e)) from e
+    if body.thetvdb_id is not None:
+        new_entry["thetvdb_id"] = body.thetvdb_id
     config["list"].append(new_entry)
     save_config(config)
     log.info(
-        "Added show %r (serie=%s, saison=%s, last_ep=%s)",
+        "Added show %r (series=%s, season=%s, last_ep=%s)",
         new_entry.get("name"),
-        new_entry.get("serie"),
-        new_entry.get("saison"),
+        new_entry.get("series"),
+        new_entry.get("season"),
         new_entry.get("last_ep"),
     )
     return JSONResponse({"ok": True, "show": new_entry})
@@ -453,14 +495,26 @@ async def add_show(body: AddShowBody) -> JSONResponse:
 
 @app.put("/api/shows/{index}")
 async def update_show(index: int, body: UpdateShowBody) -> JSONResponse:
-    log.info("PUT /api/shows/%s last_ep=%s link=%r", index, body.last_ep, body.link)
+    log.info(
+        "PUT /api/shows/%s last_ep=%s link=%r thetvdb_id=%s (in_body=%s)",
+        index,
+        body.last_ep,
+        body.link,
+        body.thetvdb_id,
+        "thetvdb_id" in body.model_fields_set,
+    )
     config = load_config()
     if index < 0 or index >= len(config["list"]):
         raise HTTPException(status_code=404, detail="Show not found.")
-    if body.last_ep is None and (body.link is None or not str(body.link).strip()):
+    link_empty = body.link is None or not str(body.link).strip()
+    if (
+        body.last_ep is None
+        and link_empty
+        and "thetvdb_id" not in body.model_fields_set
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Provide last_ep and/or a series URL to update.",
+            detail="Provide last_ep, a series URL, and/or thetvdb_id to update.",
         )
     current = config["list"][index]
     new_link = (body.link or "").strip() or None
@@ -470,12 +524,25 @@ async def update_show(index: int, body: UpdateShowBody) -> JSONResponse:
             if other is not None and other is not current:
                 raise HTTPException(status_code=409, detail="Another show already uses this URL.")
             last = body.last_ep if body.last_ep is not None else int(current.get("last_ep", 0))
-            config["list"][index] = _run_with_print_capture(
+            new_entry = _run_with_print_capture(
                 create_config_from_link, new_link, last_ep=last
             )
+            if "thetvdb_id" in body.model_fields_set:
+                if body.thetvdb_id is not None:
+                    new_entry["thetvdb_id"] = body.thetvdb_id
+                else:
+                    new_entry.pop("thetvdb_id", None)
+            elif current.get("thetvdb_id") is not None:
+                new_entry["thetvdb_id"] = current["thetvdb_id"]
+            config["list"][index] = new_entry
         else:
             if body.last_ep is not None:
                 current["last_ep"] = body.last_ep
+            if "thetvdb_id" in body.model_fields_set:
+                if body.thetvdb_id is None:
+                    current.pop("thetvdb_id", None)
+                else:
+                    current["thetvdb_id"] = body.thetvdb_id
             config["list"][index] = current
     except HTTPException:
         raise
@@ -538,7 +605,7 @@ async def download_episode_progress() -> JSONResponse:
         active = bool(_episode_progress.get("active"))
         show_link = _episode_progress.get("show_link")
         show_name = _episode_progress.get("show_name")
-        serie = _episode_progress.get("serie")
+        series = _episode_progress.get("series")
         episode = _episode_progress.get("episode")
         filename = _episode_progress.get("filename")
         downloaded = int(_episode_progress.get("downloaded") or 0)
@@ -553,7 +620,7 @@ async def download_episode_progress() -> JSONResponse:
         "active": active,
         "show_link": show_link,
         "show_name": show_name,
-        "serie": serie,
+        "series": series,
         "episode": episode,
         "filename": filename,
         "downloaded": downloaded,

@@ -26,9 +26,18 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from playwright.sync_api import sync_playwright
 
+from tvdb_naming import (
+    episode_filename,
+    get_cached_series_data,
+    match_episode_record,
+    parse_scraped_season_number,
+    season_folder_name,
+    series_root_folder,
+)
 
-def extract_links_episode(link_serie: str) -> dict[str, str]:
-    response = requests.get(link_serie)
+
+def extract_links_episode(series_url: str) -> dict[str, str]:
+    response = requests.get(series_url)
     soup = BeautifulSoup(response.content, "html.parser")
 
     episodes = {}
@@ -46,8 +55,8 @@ def extract_links_episode(link_serie: str) -> dict[str, str]:
 
     return episodes
 
-def filter_link_episode(link_serie: str, last_episode: int) -> dict[str, str]:
-    episodes = extract_links_episode(link_serie)
+def filter_link_episode(series_url: str, last_episode: int) -> dict[str, str]:
+    episodes = extract_links_episode(series_url)
 
     # Convert keys to integers for comparison
     filtered = {
@@ -57,6 +66,17 @@ def filter_link_episode(link_serie: str, last_episode: int) -> dict[str, str]:
     }
 
     return filtered
+
+
+def normalize_legacy_show_entry(show: dict[str, Any]) -> None:
+    """Migrate legacy ``serie`` / ``saison`` keys to ``series`` / ``season`` (in place)."""
+    if "series" not in show and "serie" in show:
+        show["series"] = show["serie"]
+    show.pop("serie", None)
+    if "season" not in show and "saison" in show:
+        show["season"] = show["saison"]
+    show.pop("saison", None)
+
 
 def extract_mediafire_1080p_link(episode_url: str) -> Optional[dict[str, Optional[str]]]:
     response = requests.get(episode_url)
@@ -185,7 +205,7 @@ def download_file(
     event_base: dict[str, Any] = {
         "show_link": meta.get("show_link", ""),
         "show_name": meta.get("show_name", ""),
-        "serie": meta.get("serie", ""),
+        "series": meta.get("series", ""),
         "episode": meta.get("episode"),
         "filename": meta.get("filename") or base_name,
     }
@@ -269,13 +289,10 @@ def download_file(
         raise
 
 
-def create_donghua_structure(base_path: str, serie: str, saison: str) -> None:
-    # Construct full path
-    serie_path = os.path.join(base_path, serie)
-    saison_path = os.path.join(serie_path, saison)
-    # Create directories if they don't exist
-    os.makedirs(saison_path, exist_ok=True)
-    # print(f"Created structure:\n📁{serie_path}\n📁{saison_path}")
+def create_donghua_structure(base_path: str, series: str, season: str) -> None:
+    series_path = os.path.join(base_path, series)
+    season_path = os.path.join(series_path, season)
+    os.makedirs(season_path, exist_ok=True)
 
 
 def _config_lock_path(path: str) -> str:
@@ -286,7 +303,11 @@ def load_config(path: str) -> dict[str, Any]:
     lock = FileLock(_config_lock_path(path), timeout=120)
     with lock:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+    for show in data.get("list") or []:
+        if isinstance(show, dict):
+            normalize_legacy_show_entry(show)
+    return data
 
 
 def write_config_json(path: str, config: dict[str, Any]) -> None:
@@ -361,8 +382,8 @@ def create_config_from_link(
     return {
         "name": name,
         "link": link,
-        "serie": normalized,
-        "saison": f"Season.{season_str}",
+        "series": normalized,
+        "season": f"Season.{season_str}",
         "ep": f"{normalized}.S{season_str}E",
         "last_ep": last_ep,
         "missing_ep": missing_ep
@@ -382,13 +403,41 @@ def run_downloads(config_path: str = "config.json") -> None:
     for show in config["list"]:
         name = show["name"]
         link = show["link"]
-        serie = show["serie"]
-        saison = show["saison"]
+        season = show["season"]
+        # Scraped slug naming (same as create_config_from_link); used when Skyhook is off or fails.
+        series = show["series"]
         ep_prefix = show["ep"]
         last_ep = show["last_ep"]
         print("---------------------------")
         print(f"\n📺 Processing: {name}")
-        create_donghua_structure(BASE_DOWNLOAD_PATH, serie, saison)
+
+        raw_tid = show.get("thetvdb_id")
+        tvdb_id_int = 0
+        if raw_tid is not None and str(raw_tid).strip() != "":
+            try:
+                tvdb_id_int = int(raw_tid)
+            except (TypeError, ValueError):
+                tvdb_id_int = 0
+
+        tvdb_bundle = None
+        if tvdb_id_int > 0:
+            try:
+                tvdb_bundle = get_cached_series_data(tvdb_id_int, config)
+                print(
+                    f"📚 Skyhook / TheTVDB: {tvdb_bundle.name} "
+                    f"({len(tvdb_bundle.episodes)} episode(s) in index)"
+                )
+            except Exception as exc:
+                print(
+                    f"⚠️ Could not load metadata from Skyhook ({exc}); "
+                    f"using scraped series/season names from the site (series={series!r})."
+                )
+
+        use_tvdb_layout = tvdb_bundle is not None
+        include_ep_title = bool(config.get("thetvdb_include_episode_title", True))
+
+        if not use_tvdb_layout:
+            create_donghua_structure(BASE_DOWNLOAD_PATH, series, season)
 
         episode_links = filter_link_episode(link, last_ep)
         if not episode_links:
@@ -414,7 +463,7 @@ def run_downloads(config_path: str = "config.json") -> None:
                 print(f"❌ No mediafire link found for episode {ep_num} {page_url}.")
                 missing_list.append(ep_num)
                 show["missing_ep"] = missing_list
-                list_problems.append(f"{serie} saison: {saison} episode: {ep_prefix} link: {page_url} No mediafire link found ")
+                list_problems.append(f"{series} season: {season} episode: {ep_prefix} link: {page_url} No mediafire link found ")
                 continue  # continue sequentially
 
             # Get direct download link
@@ -423,12 +472,52 @@ def run_downloads(config_path: str = "config.json") -> None:
                 print(f"❌ Could not resolve direct link {ep_num} {page_url} {direct_link}.")
                 missing_list.append(ep_num)
                 show["missing_ep"] = missing_list
-                list_problems.append(f"{serie} saison: {saison} episode: {ep_prefix} link: {page_url} Could not resolve direct link {direct_link}")
+                list_problems.append(f"{series} season: {season} episode: {ep_prefix} link: {page_url} Could not resolve direct link {direct_link}")
                 continue  # continue sequentially
 
-            # Build output path
-            filename = f"{ep_prefix}{str(ep_num).zfill(2)}.mp4"
-            output_path = os.path.join(BASE_DOWNLOAD_PATH, serie, saison, filename)
+            # Build output path (TheTVDB library layout or legacy)
+            if use_tvdb_layout and tvdb_bundle is not None:
+                scraped_season = parse_scraped_season_number(str(show.get("season", "")))
+                ep_rec = match_episode_record(
+                    tvdb_bundle.episodes,
+                    ep_num,
+                    scraped_season,
+                )
+                if ep_rec is not None:
+                    s_num = int(ep_rec.get("seasonNumber") or 0)
+                    e_num = int(ep_rec.get("number") or 0)
+                    ep_title = (ep_rec.get("name") or "").strip() or None
+                else:
+                    print(
+                        f"⚠️ No Skyhook/TVDB episode match for site episode {ep_num}; "
+                        "using scraped season and site number in the filename."
+                    )
+                    s_num = int(scraped_season or 1)
+                    e_num = ep_num
+                    ep_title = None
+                root_folder = series_root_folder(tvdb_bundle)
+                season_folder = season_folder_name(s_num, tvdb_bundle.seasons)
+                display_name = tvdb_bundle.name
+                filename = episode_filename(
+                    series_display_name=display_name,
+                    season_num=s_num,
+                    episode_num=e_num,
+                    episode_title=ep_title,
+                    extension="mp4",
+                    include_episode_title=include_ep_title,
+                )
+                create_donghua_structure(BASE_DOWNLOAD_PATH, root_folder, season_folder)
+                output_path = os.path.join(
+                    BASE_DOWNLOAD_PATH,
+                    root_folder,
+                    season_folder,
+                    filename,
+                )
+                meta_series = display_name
+            else:
+                filename = f"{ep_prefix}{str(ep_num).zfill(2)}.mp4"
+                output_path = os.path.join(BASE_DOWNLOAD_PATH, series, season, filename)
+                meta_series = series
 
             try:
                 if not TEST:
@@ -438,7 +527,7 @@ def run_downloads(config_path: str = "config.json") -> None:
                         file_meta={
                             "show_link": link,
                             "show_name": name,
-                            "serie": serie,
+                            "series": meta_series,
                             "episode": ep_num,
                             "filename": filename,
                         },
@@ -448,12 +537,15 @@ def run_downloads(config_path: str = "config.json") -> None:
                     save_config(config, cfg_path)
                     print("\n💾 Config updated!")
                 else:
-                    print(f'TEST MODE: Skipping download {serie} saison: {saison} episode: {ep_prefix} with link: {direct_link}')
+                    print(
+                        f"TEST MODE: Skipping download to {output_path} "
+                        f"with link: {direct_link}"
+                    )
             except Exception as e:
                 print(f"❌ Download failed: {e}")
                 missing_list.append(ep_num)
                 show["missing_ep"] = missing_list
-                list_problems.append(f"{serie} saison: {saison} episode: {ep_prefix} link: {page_url} Error while downloading link {direct_link}")
+                list_problems.append(f"{series} season: {season} episode: {ep_prefix} link: {page_url} Error while downloading link {direct_link}")
                 continue  # continue sequentially
 
     for problem in list_problems:

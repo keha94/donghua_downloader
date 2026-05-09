@@ -11,6 +11,7 @@
     <header class="header">
       <h1>Donghua Downloader</h1>
       <p class="muted">Config: <code id="config-path">{{ config_path }}</code></p>
+      <p class="hint muted">Library naming: with a per-show TheTVDB ID, metadata is loaded from <a href="https://skyhook.sonarr.tv/">Sonarr Skyhook</a> (no API key). Optional: <code>skyhook_language</code> / <code>SKYHOOK_LANGUAGE</code>, or <code>skyhook_base_url</code> / <code>SKYHOOK_BASE_URL</code> for a custom Skyhook-style endpoint.</p>
     </header>
 
     <p id="flash" class="flash" role="status" aria-live="polite"></p>
@@ -39,6 +40,11 @@
           Last episode (already have)
           <input type="number" name="last_ep" min="0" value="0" required />
         </label>
+        <label>
+          TheTVDB ID (optional)
+          <input type="number" name="thetvdb_id" min="1" step="1" placeholder="e.g. 412781" autocomplete="off" />
+        </label>
+        <p class="hint muted">When set, names come from Sonarr Skyhook (TheTVDB): folder like <code>Series Name (2021)</code>, season folder <code>Season 01</code> (or the season title from TVDB), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming reverts to the site-derived slug (same as when no ID): <code>Your.Show.Slug</code> / <code>Season.01</code> / <code>Your.Show.Slug.S01E01.mp4</code>.</p>
         <div class="form-actions">
           <button type="submit" class="btn primary">Add show</button>
         </div>
@@ -55,6 +61,7 @@
           <thead>
             <tr>
               <th>Name</th>
+              <th>Folder</th>
               <th>Season</th>
               <th>Last EP</th>
               <th>Link</th>
@@ -62,7 +69,7 @@
             </tr>
           </thead>
           <tbody id="shows-body">
-            <tr><td colspan="5" class="muted center">Loading…</td></tr>
+            <tr><td colspan="6" class="muted center">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -110,7 +117,11 @@
         Last episode (already have)
         <input type="number" name="last_ep" min="0" required />
       </label>
-      <p class="hint muted">Changing the URL reloads title and folder names from the site (same as remove + add).</p>
+      <label>
+        TheTVDB ID (optional)
+        <input type="number" name="thetvdb_id" min="1" step="1" placeholder="Leave empty to use title-based names" autocomplete="off" />
+      </label>
+      <p class="hint muted">Changing the URL reloads title and path fields from the site (same as remove + add); your TheTVDB ID is kept unless you clear it here. With an ID, downloads use Skyhook naming as in Add show; if metadata cannot be loaded, the same site-derived slug naming applies as without an ID.</p>
       <div class="dialog-actions">
         <button type="button" class="btn ghost" id="edit-cancel">Cancel</button>
         <button type="submit" class="btn primary" value="default">Save</button>
@@ -265,7 +276,7 @@
 
     function renderShows(shows) {
       if (!shows.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="muted center">No shows yet. Add one above.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="muted center">No shows yet. Add one above.</td></tr>';
         return;
       }
       tbody.innerHTML = shows
@@ -273,7 +284,8 @@
           (s) => `
         <tr data-index="${s.index}">
           <td class="name">${escapeHtml(s.name)}</td>
-          <td>${escapeHtml(s.saison || "")}</td>
+          <td class="mono muted">${escapeHtml(s.folder_series || s.series || "")}</td>
+          <td>${escapeHtml(s.season || "")}</td>
           <td class="num">${s.last_ep}</td>
           <td class="link"><a href="${escapeAttr(s.link)}" target="_blank" rel="noopener">${escapeHtml(truncateUrl(s.link, 48))}</a></td>
           <td class="actions">
@@ -302,7 +314,7 @@
         const data = await api("/api/shows");
         renderShows(data.shows || []);
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="5" class="error center">${escapeHtml(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="error center">${escapeHtml(e.message)}</td></tr>`;
         await refreshLogs();
       }
     }
@@ -312,9 +324,15 @@
       const fd = new FormData(ev.target);
       const link = fd.get("link").trim();
       const last_ep = parseInt(fd.get("last_ep"), 10) || 0;
+      const tvdbRaw = fd.get("thetvdb_id");
+      const payload = { link, last_ep };
+      if (tvdbRaw != null && String(tvdbRaw).trim() !== "") {
+        const t = parseInt(String(tvdbRaw), 10);
+        if (!Number.isNaN(t) && t >= 1) payload.thetvdb_id = t;
+      }
       setFlash("Adding…");
       try {
-        await api("/api/shows", { method: "POST", body: JSON.stringify({ link, last_ep }) });
+        await api("/api/shows", { method: "POST", body: JSON.stringify(payload) });
         ev.target.reset();
         ev.target.querySelector("[name=last_ep]").value = "0";
         setFlash("Show added.", "ok");
@@ -340,6 +358,9 @@
       formEdit.querySelector("[name=index]").value = String(idx);
       formEdit.querySelector("[name=link]").value = s.link;
       formEdit.querySelector("[name=last_ep]").value = String(s.last_ep);
+      const tvdbIn = formEdit.querySelector("[name=thetvdb_id]");
+      tvdbIn.value =
+        s.thetvdb_id != null && s.thetvdb_id !== "" ? String(s.thetvdb_id) : "";
       document.getElementById("edit-title").textContent = s.name;
       dlg.showModal();
     }
@@ -367,11 +388,23 @@
       const index = parseInt(fd.get("index"), 10);
       const link = fd.get("link").trim();
       const last_ep = parseInt(fd.get("last_ep"), 10);
+      const tvdbRaw = fd.get("thetvdb_id");
+      const putBody = { link, last_ep };
+      if (tvdbRaw != null && String(tvdbRaw).trim() !== "") {
+        const t = parseInt(String(tvdbRaw), 10);
+        if (Number.isNaN(t) || t < 1) {
+          setFlash("TheTVDB ID must be a positive integer or left empty.", "err");
+          return;
+        }
+        putBody.thetvdb_id = t;
+      } else {
+        putBody.thetvdb_id = null;
+      }
       setFlash("Saving…");
       try {
         await api("/api/shows/" + index, {
           method: "PUT",
-          body: JSON.stringify({ link, last_ep }),
+          body: JSON.stringify(putBody),
         });
         dlg.close();
         setFlash("Show updated.", "ok");
