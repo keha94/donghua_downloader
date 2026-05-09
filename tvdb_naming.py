@@ -259,29 +259,10 @@ def folder_series_for_show(
 
 def season_folder_name(
     season_number: int,
-    seasons: list[dict[str, Any]],
+    _seasons: list[dict[str, Any]],
 ) -> str:
-    """
-    Prefer season *name* when present (TVDB v4 / Skyhook with name).
-    Skyhook often only provides ``seasonNumber`` → fall back to ``Season NN``.
-    """
-    for s in seasons:
-        raw_n = s.get("number")
-        if raw_n is None:
-            raw_n = s.get("seasonNumber")
-        if raw_n is None:
-            continue
-        try:
-            num = int(raw_n)
-        except (TypeError, ValueError):
-            continue
-        if num != int(season_number):
-            continue
-        raw_name = (s.get("name") or "").strip()
-        if raw_name:
-            return sanitize_path_component(raw_name)
-        break
-    return f"Season {int(season_number):02d}"
+    """Library season folder: always ``Season N`` (no zero-padding; no TVDB season title)."""
+    return f"Season {int(season_number)}"
 
 
 def match_episode_record(

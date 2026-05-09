@@ -171,7 +171,7 @@
             TheTVDB ID (optional)
             <input type="number" name="thetvdb_id" min="1" step="1" placeholder="e.g. 412781" autocomplete="off" />
           </label>
-          <p class="hint muted">On <strong>add</strong>, <strong>Season</strong> is taken from words like “Season 2” in the page title (heading), not from the URL bar; if missing, season is <code>Season 01</code>. Use <strong>Edit</strong> later to fix it after TheTVDB-based naming. When a TheTVDB ID is set, names come from Sonarr Skyhook: folder like <code>Series Name (2021)</code>, season folder <code>Season 01</code> (or the season title from TVDB), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming falls back to the site-derived layout: <code>Your Show Title</code> / <code>Season 01</code> / <code>Your Show Title S01E01.mp4</code>.</p>
+          <p class="hint muted">On <strong>add</strong>, <strong>Season</strong> is taken from words like “Season 2” in the page title (heading), not from the URL bar; if missing, season is <code>Season 01</code>. Use <strong>Edit</strong> later to fix it after TheTVDB-based naming. When a TheTVDB ID is set, names come from Sonarr Skyhook: folder like <code>Series Name (2021)</code>, season folder <code>Season 1</code> (no leading zero), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming falls back to the site-derived layout: <code>Your Show Title</code> / <code>Season 01</code> / <code>Your Show Title S01E01.mp4</code>.</p>
           <div class="form-actions">
             <button type="submit" class="btn primary">Add show</button>
           </div>
