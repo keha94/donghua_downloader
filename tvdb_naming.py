@@ -23,6 +23,8 @@ class TVDBSeriesData:
     year: str
     seasons: list[dict[str, Any]]
     episodes: list[dict[str, Any]]
+    # Alternate titles / aliases from Skyhook — used when RSS feeds omit the canonical name.
+    alternate_names: list[str] = field(default_factory=list)
     fetched_at: float = field(default_factory=time.time)
 
 
@@ -106,6 +108,43 @@ def fetch_skyhook_series(
     return data
 
 
+def _alternate_names_from_skyhook(raw: dict[str, Any]) -> list[str]:
+    """Collect human-readable aliases / alternate titles from a Skyhook show payload."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def push(s: Optional[str]) -> None:
+        t = (s or "").strip()
+        if len(t) < 2:
+            return
+        key = t.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(t)
+
+    for key in ("title", "cleanTitle", "sortTitle"):
+        push(str(raw[key]) if raw.get(key) is not None else None)
+
+    alts = raw.get("alternateTitles")
+    if isinstance(alts, list):
+        for item in alts:
+            if isinstance(item, str):
+                push(item)
+            elif isinstance(item, dict):
+                push(str(item.get("title") or item.get("name") or ""))
+
+    aliases = raw.get("aliases")
+    if isinstance(aliases, list):
+        for item in aliases:
+            if isinstance(item, str):
+                push(item)
+            elif isinstance(item, dict):
+                push(str(item.get("title") or item.get("name") or ""))
+
+    return out
+
+
 def load_series_data(
     series_id: int,
     config: Optional[dict[str, Any]] = None,
@@ -117,12 +156,18 @@ def load_series_data(
     year = _series_year_from_skyhook(raw)
     seasons = list(raw.get("seasons") or [])
     episodes = [_episode_from_skyhook(ep) for ep in (raw.get("episodes") or [])]
+    alt = _alternate_names_from_skyhook(raw)
+    if name and name not in alt:
+        alt.insert(0, name)
+    elif not alt and name:
+        alt = [name]
     return TVDBSeriesData(
         series_id=series_id,
         name=name,
         year=year,
         seasons=seasons,
         episodes=episodes,
+        alternate_names=alt,
     )
 
 
@@ -275,3 +320,42 @@ def episode_filename(
 
 def clear_caches() -> None:
     _SERIES_CACHE.clear()
+
+
+def series_match_strings(data: TVDBSeriesData) -> list[str]:
+    """
+    Ordered unique names suitable for substring matching against RSS item titles.
+
+    Uses the canonical title plus alternate names parsed from Skyhook (when present).
+    """
+    return list(data.alternate_names) if data.alternate_names else [data.name]
+
+
+def rss_title_matches_series(
+    *,
+    feed_title: str,
+    regex_pattern: Optional[str],
+    tvdb_bundle: Optional[TVDBSeriesData],
+) -> bool:
+    """
+    Decide whether an RSS entry title belongs to this series.
+
+    * If ``regex_pattern`` is set, :func:`re.search` is used against the title.
+    * Otherwise, any TVDB-derived name substring match (case-insensitive) wins.
+      When Skyhook metadata is unavailable, this returns ``False``.
+    """
+    title = feed_title.strip()
+    if not title:
+        return False
+    if regex_pattern and str(regex_pattern).strip():
+        try:
+            return re.search(regex_pattern, title) is not None
+        except re.error:
+            return False
+    if tvdb_bundle is None:
+        return False
+    tl = title.casefold()
+    for n in series_match_strings(tvdb_bundle):
+        if n.strip() and n.strip().casefold() in tl:
+            return True
+    return False

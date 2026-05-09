@@ -238,6 +238,21 @@ all = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.5)", "httpx (>
 standard = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.5)", "httpx (>=0.23.0)", "jinja2 (>=2.11.2)", "python-multipart (>=0.0.7)", "uvicorn[standard] (>=0.12.0)"]
 
 [[package]]
+name = "feedparser"
+version = "6.0.12"
+description = "Universal feed parser, handles RSS 0.9x, RSS 1.0, RSS 2.0, CDF, Atom 0.3, and Atom 1.0 feeds"
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "feedparser-6.0.12-py3-none-any.whl", hash = "sha256:6bbff10f5a52662c00a2e3f86a38928c37c48f77b3c511aedcd51de933549324"},
+    {file = "feedparser-6.0.12.tar.gz", hash = "sha256:64f76ce90ae3e8ef5d1ede0f8d3b50ce26bcce71dd8ae5e82b1cd2d4a5f94228"},
+]
+
+[package.dependencies]
+sgmllib3k = "*"
+
+[[package]]
 name = "filelock"
 version = "3.16.1"
 description = "A platform independent file lock."
@@ -517,6 +532,18 @@ files = [
     {file = "markupsafe-3.0.3-cp39-cp39-win_amd64.whl", hash = "sha256:7c3fb7d25180895632e5d3148dbdc29ea38ccb7fd210aa27acbd1201a1902c6e"},
     {file = "markupsafe-3.0.3-cp39-cp39-win_arm64.whl", hash = "sha256:38664109c14ffc9e7437e86b4dceb442b0096dfe3541d7864d9cbe1da4cf36c8"},
     {file = "markupsafe-3.0.3.tar.gz", hash = "sha256:722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698"},
+]
+
+[[package]]
+name = "packaging"
+version = "26.2"
+description = "Core utilities for Python packages"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e"},
+    {file = "packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661"},
 ]
 
 [[package]]
@@ -825,6 +852,27 @@ files = [
 ]
 
 [[package]]
+name = "qbittorrent-api"
+version = "2026.5.1"
+description = "Python client for qBittorrent v4.1+ Web API."
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "qbittorrent_api-2026.5.1-py3-none-any.whl", hash = "sha256:904dd74be5bf42e5bb08a814c19c61eb05aeb39ca6a241bb439c5da4df600ff0"},
+    {file = "qbittorrent_api-2026.5.1.tar.gz", hash = "sha256:a42c120feab9bea87f592c60e22db42c1450bfc247504b41ce83730bdc7a0b5b"},
+]
+
+[package.dependencies]
+packaging = "*"
+requests = ">=2.16.0"
+urllib3 = ">=1.24.2"
+
+[package.extras]
+dev = ["build (==1.4.4)", "chardet (<6.0.0)", "coverage[toml] (==7.10.7)", "mypy (==1.19.1)", "pre-commit (==4.3.0)", "pytest (==8.4.2)", "tox (==4.30.3)", "twine (==6.2.0)", "types-requests (==2.32.4.20260107)"]
+docs = ["furo (==2025.12.19)", "sphinx (==8.2.1)", "sphinx-autobuild (==2024.10.3)", "sphinx-autodoc-typehints (==3.1.0)", "sphinx-copybutton (==0.5.2)", "sphinxcontrib-spelling (==8.0.1)"]
+
+[[package]]
 name = "requests"
 version = "2.32.4"
 description = "Python HTTP for Humans."
@@ -845,6 +893,17 @@ urllib3 = ">=1.21.1,<3"
 [package.extras]
 socks = ["PySocks (>=1.5.6,!=1.5.7)"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
+
+[[package]]
+name = "sgmllib3k"
+version = "1.0.0"
+description = "Py3k port of sgmllib."
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "sgmllib3k-1.0.0.tar.gz", hash = "sha256:7868fb1c8bfa764c1ac563d3cf369c381d1325d36124933a726f29fcdaa812e9"},
+]
 
 [[package]]
 name = "soupsieve"
@@ -1240,4 +1299,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "5a487e5798b1e93ef2a7974669bc5e1350ee81b94b0a383dff6fe5c4db3005e7"
+content-hash = "7b396a8139db910d2bc5de732b4edcba23ef23da01aa1372984fe411758b3e49"

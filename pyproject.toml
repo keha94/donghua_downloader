@@ -24,6 +24,8 @@ soupsieve = "2.7"
 tqdm = "4.67.1"
 typing-extensions = "4.14.1"
 urllib3 = "2.5.0"
+qbittorrent-api = "^2026.5.1"
+feedparser = "^6.0.12"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

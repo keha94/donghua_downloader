@@ -17,59 +17,50 @@
     <p id="flash" class="flash" role="status" aria-live="polite"></p>
 
     <section class="card downloader-card">
-      <div class="section-head">
+      <div class="section-head downloader-toolbar-head">
         <h2>Downloader</h2>
-        <span id="download-status" class="muted download-status">Status: …</span>
+        <div class="downloader-status-group muted">
+          <span id="download-status" class="download-status">Full run: …</span>
+          <span id="rss-import-status" class="rss-import-status">RSS import: …</span>
+        </div>
       </div>
       <p class="hint muted">
-        Runs <code>run_downloads()</code> in a <strong>background thread</strong> (can take a long time). Output appears in the activity log below. Only one run at a time. While the server is up, a scheduled pass also runs every hour if idle (override with <code>DOWNLOAD_SCHEDULE_SECONDS</code>, or set <code>0</code> to disable).
+        <strong>Full run</strong> runs <code>run_downloads()</code> in a background thread (RSS poll + site scraping). <strong>RSS import pending</strong> only moves finished qBittorrent jobs into your library — same as the scheduled RSS import pass. At most one of each job at a time; they can run together. Output goes to the activity log below. Scheduled full run: hourly if idle (<code>DOWNLOAD_SCHEDULE_SECONDS</code>). Scheduled RSS import: every 30 minutes (<code>RSS_IMPORT_SCHEDULE_SECONDS</code>). Enable <strong>debug logging</strong> for RSS match diagnostics.
       </p>
-      <div class="form-actions">
-        <button type="button" class="btn primary" id="btn-run-download">Run downloader</button>
+      <div class="form-actions downloader-actions">
+        <button type="button" class="btn primary" id="btn-run-download">Run full downloader</button>
+        <button type="button" class="btn ghost" id="btn-run-rss-import">RSS import pending</button>
+        <label class="debug-toggle muted">
+          <input type="checkbox" id="chk-debug" />
+          Debug logging (RSS match diagnostics)
+        </label>
       </div>
     </section>
 
     <section class="card">
-      <h2>Add show</h2>
-      <form id="form-add" class="form-grid">
-        <label>
-          Series page URL
-          <input type="url" name="link" required placeholder="https://animexin.dev/…" autocomplete="off" />
-        </label>
-        <label>
-          Last episode (already have)
-          <input type="number" name="last_ep" min="0" value="0" required />
-        </label>
-        <label>
-          TheTVDB ID (optional)
-          <input type="number" name="thetvdb_id" min="1" step="1" placeholder="e.g. 412781" autocomplete="off" />
-        </label>
-        <p class="hint muted">When set, names come from Sonarr Skyhook (TheTVDB): folder like <code>Series Name (2021)</code>, season folder <code>Season 01</code> (or the season title from TVDB), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming reverts to the site-derived slug (same as when no ID): <code>Your.Show.Slug</code> / <code>Season.01</code> / <code>Your.Show.Slug.S01E01.mp4</code>.</p>
-        <div class="form-actions">
-          <button type="submit" class="btn primary">Add show</button>
-        </div>
-      </form>
-    </section>
-
-    <section class="card">
-      <div class="section-head">
+      <div class="section-head shows-section-head">
         <h2>Shows</h2>
-        <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
+        <div class="shows-toolbar">
+          <button type="button" class="btn ghost" id="btn-add-show">Add show</button>
+          <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table class="shows-table">
           <thead>
             <tr>
+              <th>Kind</th>
               <th>Name</th>
               <th>Folder</th>
               <th>Season</th>
               <th>Last EP</th>
+              <th>qBit</th>
               <th>Link</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="shows-body">
-            <tr><td colspan="6" class="muted center">Loading…</td></tr>
+            <tr><td colspan="8" class="muted center">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -78,7 +69,7 @@
     <section class="card download-progress-card" aria-labelledby="download-progress-heading">
       <h2 id="download-progress-heading">Download progress</h2>
       <p class="hint muted">
-        Live byte progress while an episode file is downloading. Shows idle when no file transfer is active (the downloader may still be resolving links or processing another show).
+        Live byte progress for <strong>direct HTTP</strong> downloads and for <strong>RSS / qBittorrent</strong> episodes while the torrent is active (the web UI polls qBittorrent every few seconds so the bar keeps updating after a downloader run finishes). Idle when no transfer is in progress (the downloader may still be resolving links or processing another show).
       </p>
       <div id="download-progress-slot" class="download-progress-slot" aria-live="polite">
         <p class="muted download-progress-idle">No file download in progress.</p>
@@ -105,23 +96,41 @@
   </div>
 
   <dialog id="dlg-edit" class="dialog">
-    <form id="form-edit" class="dialog-inner">
-      <h3>Edit show</h3>
-      <p class="muted edit-title" id="edit-title"></p>
+    <form id="form-edit" class="dialog-inner form-grid">
+      <div class="dialog-edit-header">
+        <h3>Edit show</h3>
+        <p class="muted edit-title" id="edit-title"></p>
+      </div>
       <input type="hidden" name="index" />
-      <label>
-        Series page URL
+      <input type="hidden" name="show_type" id="edit-show-type" value="animexin" />
+      <label class="dialog-field-full">
+        <span id="edit-link-label">Series page URL</span>
         <input type="url" name="link" required />
       </label>
-      <label>
+      <label class="dialog-field-full">
         Last episode (already have)
         <input type="number" name="last_ep" min="0" required />
       </label>
-      <label>
-        TheTVDB ID (optional)
+      <label class="dialog-field-full">
+        <span id="edit-tvdb-label-text">TheTVDB ID (optional)</span>
         <input type="number" name="thetvdb_id" min="1" step="1" placeholder="Leave empty to use title-based names" autocomplete="off" />
       </label>
-      <p class="hint muted">Changing the URL reloads title and path fields from the site (same as remove + add); your TheTVDB ID is kept unless you clear it here. With an ID, downloads use Skyhook naming as in Add show; if metadata cannot be loaded, the same site-derived slug naming applies as without an ID.</p>
+      <div id="edit-rss-extra" class="edit-rss-extra" role="group" aria-label="RSS feed matching options" hidden>
+        <label>
+          Season (for episode mapping)
+          <input type="text" name="season" id="edit-season" placeholder="Season.01" autocomplete="off" />
+        </label>
+        <label>
+          Show name regex <span class="label-optional">(optional)</span>
+          <input type="text" name="show_name_regex" id="edit-show_name_regex" placeholder="(?i)…" autocomplete="off" />
+        </label>
+        <label>
+          Episode regex <span class="label-optional">(optional)</span>
+          <input type="text" name="episode_regex" id="edit-episode_regex" placeholder="First capture group = episode number" autocomplete="off" />
+        </label>
+      </div>
+      <p class="hint muted dialog-edit-hint" id="edit-hint-animexin">Changing the URL reloads title and path fields from the site (same as remove + add); your TheTVDB ID is kept unless you clear it here. With an ID, downloads use Skyhook naming as in Add show; if metadata cannot be loaded, the same site-derived slug naming applies as without an ID.</p>
+      <p class="hint muted dialog-edit-hint" id="edit-hint-rss" hidden>For RSS shows, the URL is the feed. TheTVDB ID is required for library naming. Regex fields are optional; omit them to match feed titles against Skyhook’s title and alternate names.</p>
       <div class="dialog-actions">
         <button type="button" class="btn ghost" id="edit-cancel">Cancel</button>
         <button type="submit" class="btn primary" value="default">Save</button>
@@ -129,11 +138,93 @@
     </form>
   </dialog>
 
+  <dialog id="dlg-add" class="dialog add-show-card">
+    <div class="dialog-inner dialog-add-inner">
+      <div class="dialog-edit-header">
+        <h3>Add show</h3>
+      </div>
+      <div class="section-head add-show-toolbar">
+        <span class="muted dialog-add-tabs-label">Source</span>
+        <div class="source-tablist" role="tablist" aria-label="How to add this show">
+          <button type="button" class="btn primary tab-source" role="tab" id="tab-add-site" aria-selected="true" aria-controls="panel-add-site" tabindex="0">
+            Animexin.dev
+          </button>
+          <button type="button" class="btn ghost tab-source" role="tab" id="tab-add-rss" aria-selected="false" aria-controls="panel-add-rss" tabindex="-1">
+            RSS · qBittorrent
+          </button>
+        </div>
+      </div>
+
+      <div id="panel-add-site" role="tabpanel" aria-labelledby="tab-add-site" class="tab-panel-add">
+        <form id="form-add" class="form-grid">
+          <label>
+            Series page URL
+            <input type="url" name="link" required placeholder="https://animexin.dev/…" autocomplete="off" />
+          </label>
+          <label>
+            Last episode (already have)
+            <input type="number" name="last_ep" min="0" value="0" required />
+          </label>
+          <label>
+            TheTVDB ID (optional)
+            <input type="number" name="thetvdb_id" min="1" step="1" placeholder="e.g. 412781" autocomplete="off" />
+          </label>
+          <p class="hint muted">When set, names come from Sonarr Skyhook (TheTVDB): folder like <code>Series Name (2021)</code>, season folder <code>Season 01</code> (or the season title from TVDB), files like <code>Series Name S01E01 - Episode Title.mp4</code>. If Skyhook fails, naming reverts to the site-derived slug (same as when no ID): <code>Your.Show.Slug</code> / <code>Season.01</code> / <code>Your.Show.Slug.S01E01.mp4</code>.</p>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">Add show</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="panel-add-rss" role="tabpanel" aria-labelledby="tab-add-rss" class="tab-panel-add" hidden>
+        <form id="form-add-rss" class="form-grid">
+          <label>
+            Display name
+            <input type="text" name="name" required placeholder="Series title" autocomplete="off" />
+          </label>
+          <label>
+            RSS feed URL
+            <input type="url" name="rss_url" required placeholder="https://…" autocomplete="off" />
+          </label>
+          <label>
+            TheTVDB ID
+            <input type="number" name="thetvdb_id" min="1" step="1" required placeholder="e.g. 412781" autocomplete="off" />
+          </label>
+          <label>
+            Last episode (already have)
+            <input type="number" name="last_ep" min="0" value="0" required />
+          </label>
+          <label>
+            Season (for episode mapping)
+            <input type="text" name="season" value="Season.01" placeholder="Season.01" autocomplete="off" />
+          </label>
+          <label>
+            Show name regex (optional)
+            <input type="text" name="show_name_regex" placeholder="e.g. (?i)My\\s+Show" autocomplete="off" />
+          </label>
+          <label>
+            Episode regex (optional)
+            <input type="text" name="episode_regex" placeholder="First capture group = episode number" autocomplete="off" />
+          </label>
+          <p class="hint muted">Items are matched to this series using the regexes above, or — if omitted — TheTVDB title and alternate names from Skyhook. Episode numbers use the episode regex’s <strong>first capturing group</strong>, or common <code>S01E02</code> / <code>Episode 3</code> patterns. Matching releases are sent to qBittorrent (see <code>qbittorrent</code> in config); when a job finishes, the largest video file is moved into your library with the same TVDB-based naming as animexin shows.</p>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">Add RSS show</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" id="add-cancel">Cancel</button>
+      </div>
+    </div>
+  </dialog>
+
   <script>
     const flash = document.getElementById("flash");
     const tbody = document.getElementById("shows-body");
     const downloadProgressSlot = document.getElementById("download-progress-slot");
     const dlg = document.getElementById("dlg-edit");
+    const dlgAdd = document.getElementById("dlg-add");
     const formEdit = document.getElementById("form-edit");
 
     function setFlash(msg, kind) {
@@ -206,9 +297,33 @@
       return s ? " · " + escapeHtml(s) : "";
     }
 
+    function formatEtaSec(sec) {
+      const s = Number(sec);
+      if (!Number.isFinite(s) || s < 0 || s >= 8640000) return "";
+      if (s < 60) return s + "s left";
+      if (s < 3600) return Math.floor(s / 60) + "m left";
+      return Math.floor(s / 3600) + "h left";
+    }
+
+    function torrentMetaSuffix(p) {
+      if (p.source !== "torrent") return "";
+      const bits = [];
+      if (p.torrent_state) bits.push(String(p.torrent_state));
+      const eta = formatEtaSec(p.torrent_eta);
+      if (eta) bits.push(eta);
+      if (!bits.length) return "";
+      return " · " + bits.map(escapeHtml).join(" · ");
+    }
+
     function renderEpisodeProgressBarMarkup(p) {
       const ep = p.episode != null ? "EP " + p.episode : "Episode";
       const fn = p.filename ? escapeHtml(p.filename) : "";
+      const src =
+        p.source === "torrent"
+          ? '<span class="muted"> · qBittorrent</span>'
+          : p.source === "http"
+            ? '<span class="muted"> · HTTP</span>'
+            : "";
       const label = fn ? ep + " · " + fn : ep;
       if (p.indeterminate) {
         return (
@@ -216,8 +331,10 @@
           '<div class="bar-track"><div class="bar-fill"></div></div>' +
           '<span class="episode-progress-label muted">' +
           label +
+          src +
           " — downloading…" +
           speedSuffix(p) +
+          torrentMetaSuffix(p) +
           "</span></div>"
         );
       }
@@ -231,10 +348,12 @@
         '%"></div></div>' +
         '<span class="episode-progress-label muted">' +
         label +
+        src +
         " — " +
         pct +
         "%" +
         speedSuffix(p) +
+        torrentMetaSuffix(p) +
         "</span></div>"
       );
     }
@@ -274,19 +393,27 @@
       } catch (_) {}
     }
 
+    function showKindLabel(s) {
+      const t = String(s.type || "animexin").toLowerCase();
+      if (t === "rss_qbittorrent" || t === "rss") return "RSS";
+      return "Site";
+    }
+
     function renderShows(shows) {
       if (!shows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="muted center">No shows yet. Add one above.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="muted center">No shows yet. Use <strong>Add show</strong> to create one.</td></tr>';
         return;
       }
       tbody.innerHTML = shows
         .map(
           (s) => `
         <tr data-index="${s.index}">
+          <td class="mono muted">${escapeHtml(showKindLabel(s))}</td>
           <td class="name">${escapeHtml(s.name)}</td>
           <td class="mono muted">${escapeHtml(s.folder_series || s.series || "")}</td>
           <td>${escapeHtml(s.season || "")}</td>
           <td class="num">${s.last_ep}</td>
+          <td class="num">${s.rss_pending != null && s.rss_pending > 0 ? escapeHtml(String(s.rss_pending)) : "—"}</td>
           <td class="link"><a href="${escapeAttr(s.link)}" target="_blank" rel="noopener">${escapeHtml(truncateUrl(s.link, 48))}</a></td>
           <td class="actions">
             <button type="button" class="btn small ghost btn-edit" data-index="${s.index}">Edit</button>
@@ -314,10 +441,76 @@
         const data = await api("/api/shows");
         renderShows(data.shows || []);
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="6" class="error center">${escapeHtml(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="error center">${escapeHtml(e.message)}</td></tr>`;
         await refreshLogs();
       }
     }
+
+    const tabAddSite = document.getElementById("tab-add-site");
+    const tabAddRss = document.getElementById("tab-add-rss");
+    const panelAddSite = document.getElementById("panel-add-site");
+    const panelAddRss = document.getElementById("panel-add-rss");
+
+    function setAddShowTab(which) {
+      const rss = which === "rss";
+      tabAddSite.classList.toggle("primary", !rss);
+      tabAddSite.classList.toggle("ghost", rss);
+      tabAddSite.setAttribute("aria-selected", rss ? "false" : "true");
+      tabAddSite.tabIndex = rss ? -1 : 0;
+      tabAddRss.classList.toggle("primary", rss);
+      tabAddRss.classList.toggle("ghost", !rss);
+      tabAddRss.setAttribute("aria-selected", rss ? "true" : "false");
+      tabAddRss.tabIndex = rss ? 0 : -1;
+      panelAddSite.hidden = rss;
+      panelAddRss.hidden = !rss;
+    }
+
+    tabAddSite.addEventListener("click", () => setAddShowTab("site"));
+    tabAddRss.addEventListener("click", () => setAddShowTab("rss"));
+
+    tabAddSite.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        setAddShowTab("rss");
+        tabAddRss.focus();
+      }
+    });
+    tabAddRss.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        setAddShowTab("site");
+        tabAddSite.focus();
+      }
+    });
+
+    document.getElementById("form-add-rss").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const name = fd.get("name").trim();
+      const rss_url = fd.get("rss_url").trim();
+      const thetvdb_id = parseInt(fd.get("thetvdb_id"), 10);
+      const last_ep = parseInt(fd.get("last_ep"), 10) || 0;
+      const season = (fd.get("season") || "Season.01").trim() || "Season.01";
+      const snr = fd.get("show_name_regex");
+      const erx = fd.get("episode_regex");
+      const payload = { name, rss_url, thetvdb_id, last_ep, season };
+      if (snr != null && String(snr).trim() !== "") payload.show_name_regex = String(snr).trim();
+      if (erx != null && String(erx).trim() !== "") payload.episode_regex = String(erx).trim();
+      setFlash("Adding RSS show…");
+      try {
+        await api("/api/shows/rss", { method: "POST", body: JSON.stringify(payload) });
+        ev.target.reset();
+        ev.target.querySelector("[name=last_ep]").value = "0";
+        ev.target.querySelector("[name=season]").value = "Season.01";
+        dlgAdd.close();
+        setFlash("RSS show added.", "ok");
+        await refreshLogs();
+        await loadShows();
+      } catch (e) {
+        setFlash(e.message, "err");
+        await refreshLogs();
+      }
+    });
 
     document.getElementById("form-add").addEventListener("submit", async (ev) => {
       ev.preventDefault();
@@ -335,6 +528,7 @@
         await api("/api/shows", { method: "POST", body: JSON.stringify(payload) });
         ev.target.reset();
         ev.target.querySelector("[name=last_ep]").value = "0";
+        dlgAdd.close();
         setFlash("Show added.", "ok");
         await refreshLogs();
         await loadShows();
@@ -346,6 +540,12 @@
 
     document.getElementById("btn-refresh").addEventListener("click", loadShows);
 
+    document.getElementById("btn-add-show").addEventListener("click", () => {
+      setAddShowTab("site");
+      dlgAdd.showModal();
+    });
+    document.getElementById("add-cancel").addEventListener("click", () => dlgAdd.close());
+
     let showsCache = [];
     async function onEdit(ev) {
       const idx = parseInt(ev.target.getAttribute("data-index"), 10);
@@ -355,12 +555,32 @@
       } catch (_) {}
       const s = showsCache.find((x) => x.index === idx);
       if (!s) return;
+      const st = String(s.type || "animexin").toLowerCase();
+      const isRss = st === "rss_qbittorrent" || st === "rss";
       formEdit.querySelector("[name=index]").value = String(idx);
-      formEdit.querySelector("[name=link]").value = s.link;
+      document.getElementById("edit-show-type").value = isRss ? "rss" : "animexin";
+      formEdit.querySelector("[name=link]").value = s.link || "";
       formEdit.querySelector("[name=last_ep]").value = String(s.last_ep);
       const tvdbIn = formEdit.querySelector("[name=thetvdb_id]");
       tvdbIn.value =
         s.thetvdb_id != null && s.thetvdb_id !== "" ? String(s.thetvdb_id) : "";
+      tvdbIn.required = isRss;
+      tvdbIn.placeholder = isRss ? "Required for RSS naming" : "Leave empty to use title-based names";
+      document.getElementById("edit-link-label").textContent = isRss
+        ? "RSS feed URL"
+        : "Series page URL";
+      document.getElementById("edit-tvdb-label-text").textContent = isRss
+        ? "TheTVDB ID (required)"
+        : "TheTVDB ID (optional)";
+      const rssExtra = document.getElementById("edit-rss-extra");
+      rssExtra.hidden = !isRss;
+      document.getElementById("edit-hint-animexin").hidden = isRss;
+      document.getElementById("edit-hint-rss").hidden = !isRss;
+      document.getElementById("edit-season").value = isRss ? (s.season || "Season.01") : "";
+      document.getElementById("edit-show_name_regex").value = isRss
+        ? (s.show_name_regex || "")
+        : "";
+      document.getElementById("edit-episode_regex").value = isRss ? (s.episode_regex || "") : "";
       document.getElementById("edit-title").textContent = s.name;
       dlg.showModal();
     }
@@ -389,6 +609,8 @@
       const link = fd.get("link").trim();
       const last_ep = parseInt(fd.get("last_ep"), 10);
       const tvdbRaw = fd.get("thetvdb_id");
+      const showType = fd.get("show_type") || "animexin";
+      const isRss = showType === "rss";
       const putBody = { link, last_ep };
       if (tvdbRaw != null && String(tvdbRaw).trim() !== "") {
         const t = parseInt(String(tvdbRaw), 10);
@@ -397,8 +619,21 @@
           return;
         }
         putBody.thetvdb_id = t;
+      } else if (isRss) {
+        setFlash("RSS shows require a TheTVDB ID.", "err");
+        return;
       } else {
         putBody.thetvdb_id = null;
+      }
+      if (isRss) {
+        const season = fd.get("season");
+        if (season != null && String(season).trim() !== "") {
+          putBody.season = String(season).trim();
+        }
+        const snrx = fd.get("show_name_regex");
+        putBody.show_name_regex = snrx != null && String(snrx).trim() !== "" ? String(snrx).trim() : null;
+        const eprx = fd.get("episode_regex");
+        putBody.episode_regex = eprx != null && String(eprx).trim() !== "" ? String(eprx).trim() : null;
       }
       setFlash("Saving…");
       try {
@@ -446,7 +681,36 @@
     refreshLogs();
     refreshEpisodeProgress();
 
+    const chkDebug = document.getElementById("chk-debug");
+
+    async function loadSettings() {
+      try {
+        const data = await api("/api/settings");
+        chkDebug.checked = !!data.debug;
+      } catch (_) {}
+    }
+
+    chkDebug.addEventListener("change", async () => {
+      const on = chkDebug.checked;
+      try {
+        await api("/api/settings", {
+          method: "PATCH",
+          body: JSON.stringify({ debug: on }),
+        });
+        setFlash(
+          "Debug logging " + (on ? "enabled" : "disabled") + " (saved to config.json).",
+          "ok"
+        );
+      } catch (e) {
+        setFlash(e.message, "err");
+        chkDebug.checked = !on;
+      }
+    });
+
+    loadSettings();
+
     const downloadStatusEl = document.getElementById("download-status");
+    const rssImportStatusEl = document.getElementById("rss-import-status");
 
     async function refreshDownloadStatus() {
       try {
@@ -464,9 +728,31 @@
           else if (sec % 60 === 0) sched = " · auto every " + sec / 60 + "m";
           else sched = " · auto every " + sec + "s";
         } else sched = " · auto off";
-        downloadStatusEl.textContent = "Status: " + line + sched;
+        downloadStatusEl.textContent = "Full run: " + line + sched;
       } catch (_) {
-        downloadStatusEl.textContent = "Status: (unavailable)";
+        downloadStatusEl.textContent = "Full run: (unavailable)";
+      }
+    }
+
+    async function refreshRssImportStatus() {
+      try {
+        const r = await fetch("/api/rss-import/status");
+        const s = await r.json();
+        let line = "Idle";
+        if (s.running && s.thread_alive) line = "Running…";
+        else if (s.running && !s.thread_alive) line = "Starting…";
+        if (s.error) line += " — last error: " + s.error;
+        else if (s.finished_at && !s.running) line = "Idle (last finished " + s.finished_at + ")";
+        const sec = s.schedule_interval_seconds;
+        let sched = "";
+        if (sec > 0) {
+          if (sec % 3600 === 0) sched = " · auto every " + sec / 3600 + "h";
+          else if (sec % 60 === 0) sched = " · auto every " + sec / 60 + "m";
+          else sched = " · auto every " + sec + "s";
+        } else sched = " · auto off";
+        rssImportStatusEl.textContent = "RSS import: " + line + sched;
+      } catch (_) {
+        rssImportStatusEl.textContent = "RSS import: (unavailable)";
       }
     }
 
@@ -491,9 +777,37 @@
       }
     });
 
+    document.getElementById("btn-run-rss-import").addEventListener("click", async () => {
+      if (
+        !confirm(
+          "Run RSS pending-import now? This moves finished torrents into your library (same as the scheduled job)."
+        )
+      )
+        return;
+      setFlash("Starting RSS import…");
+      try {
+        const r = await fetch("/api/rss-import", { method: "POST" });
+        const data = await r.json().catch(() => ({}));
+        if (r.status === 409) {
+          setFlash(data.detail || "Already running", "err");
+        } else if (!r.ok) {
+          setFlash(data.detail || r.statusText, "err");
+        } else {
+          setFlash("RSS import started in background.", "ok");
+        }
+        await refreshRssImportStatus();
+        await refreshLogs();
+      } catch (e) {
+        setFlash(e.message, "err");
+        await refreshLogs();
+      }
+    });
+
     setInterval(refreshDownloadStatus, 2000);
+    setInterval(refreshRssImportStatus, 2000);
     setInterval(refreshEpisodeProgress, 600);
     refreshDownloadStatus();
+    refreshRssImportStatus();
   </script>
 </body>
 </html>

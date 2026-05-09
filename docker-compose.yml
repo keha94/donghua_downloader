@@ -2,12 +2,18 @@ services:
   app:
     build: .
     environment:
-      DOWNLOAD_SCHEDULE_SECONDS: "3600"
+      DOWNLOAD_SCHEDULE_SECONDS: ${DOWNLOAD_SCHEDULE_SECONDS:-3600}
+      QBITTORRENT_HOST: ${QBITTORRENT_HOST:?set QBITTORRENT_HOST in .env}
+      QBITTORRENT_PORT: ${QBITTORRENT_PORT:?set QBITTORRENT_PORT in .env}
+      QBITTORRENT_USERNAME: ${QBITTORRENT_USERNAME:?set QBITTORRENT_USERNAME in .env}
+      QBITTORRENT_PASSWORD: ${QBITTORRENT_PASSWORD:?set QBITTORRENT_PASSWORD in .env}
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
       - ./config.json:/app/config.json
       - ./downloads:/downloads
+      # Mapping location of torrent download location to internal docker location
+      - /Volumes/Movies/Others:/volume1/Movies/Others
     command:
       [
         "uvicorn",

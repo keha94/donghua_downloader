@@ -100,6 +100,28 @@ code {
   margin: 0;
 }
 
+.shows-toolbar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+/* Add-show modal: tall RSS form */
+#dlg-add.dialog {
+  max-width: min(620px, 94vw);
+}
+
+.dialog-add-inner {
+  max-height: min(90vh, 880px);
+  overflow-y: auto;
+}
+
+.dialog-add-tabs-label {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
 .form-grid {
   display: grid;
   gap: 1rem;
@@ -114,13 +136,59 @@ code {
 }
 
 input[type="url"],
-input[type="number"] {
+input[type="number"],
+input[type="text"] {
   font: inherit;
   padding: 0.55rem 0.65rem;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
+}
+
+.tab-panel-add {
+  min-height: 0;
+}
+
+/* Tabs reuse .btn.primary / .btn.ghost — same sizing as Shows “Refresh”; row matches .section-head */
+.add-show-toolbar .source-tablist {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.add-show-toolbar .tab-source {
+  flex-shrink: 0;
+}
+
+.add-show-toolbar {
+  gap: 0.75rem 1rem;
+}
+
+.add-show-card .hint.muted {
+  margin: 0 0 0.85rem;
+  font-size: 0.9rem;
+}
+
+.add-show-card .hint.muted code {
+  font-size: 0.75rem;
+}
+
+.add-show-card .form-grid label {
+  gap: 0.45rem;
+}
+
+.add-show-card .form-grid {
+  gap: 0.9rem;
+}
+
+.add-show-card .form-grid input[type="url"],
+.add-show-card .form-grid input[type="number"],
+.add-show-card .form-grid input[type="text"] {
+  width: 100%;
+  min-height: 2.35rem;
+  border-color: #323946;
 }
 
 input:focus {
@@ -131,6 +199,25 @@ input:focus {
 .form-actions {
   display: flex;
   align-items: flex-end;
+}
+
+.downloader-actions {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.25rem;
+}
+
+.debug-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.debug-toggle input {
+  width: auto;
+  margin: 0;
 }
 
 .btn {
@@ -324,7 +411,8 @@ input:focus {
   padding: 0;
   background: var(--surface);
   color: var(--text);
-  max-width: min(480px, 92vw);
+  max-width: min(560px, 94vw);
+  width: 100%;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
 }
 
@@ -340,9 +428,69 @@ input:focus {
   gap: 0.85rem;
 }
 
-.dialog-inner h3 {
+/* Edit dialog: use same vertical field stack as Add show (avoid inline label + input) */
+.dialog-inner.form-grid {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.dialog-edit-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.dialog-edit-header h3 {
   margin: 0;
   font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.dialog-edit-header .edit-title {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.dialog-inner.form-grid .dialog-field-full,
+.dialog-inner.form-grid .edit-rss-extra label {
+  gap: 0.45rem;
+}
+
+.dialog-inner.form-grid input[type="url"],
+.dialog-inner.form-grid input[type="number"],
+.dialog-inner.form-grid input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.35rem;
+  border-color: #323946;
+}
+
+.edit-rss-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin: 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.edit-rss-extra label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.label-optional {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.92em;
+}
+
+.dialog-edit-hint {
+  margin: 0;
+  line-height: 1.45;
+  font-size: 0.8rem;
 }
 
 .dialog-inner .hint {
@@ -354,11 +502,12 @@ input:focus {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
-  margin-top: 0.25rem;
+  margin-top: 0.35rem;
+  padding-top: 0.25rem;
 }
 
 .edit-title {
-  margin: -0.25rem 0 0;
+  margin: 0;
 }
 
 .log-card .hint {
@@ -382,10 +531,24 @@ input:focus {
   user-select: none;
 }
 
-.downloader-card .download-status {
+.downloader-toolbar-head {
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.downloader-status-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  max-width: min(100%, 28rem);
+}
+
+.downloader-card .download-status,
+.downloader-card .rss-import-status {
   font-size: 0.85rem;
   text-align: right;
-  max-width: 55%;
+  line-height: 1.35;
 }
 
 .downloader-card .hint code {

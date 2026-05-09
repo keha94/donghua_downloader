@@ -12,6 +12,9 @@ from typing import Any, Callable, Optional
 # Each event is a dict with key "kind": file_start | file_progress | file_complete | file_error.
 _download_progress_hook: Optional[Callable[[dict[str, Any]], None]] = None
 
+# Optional hook for RSS/qBittorrent torrent progress (kind: torrent_progress).
+_torrent_progress_hook: Optional[Callable[[dict[str, Any]], None]] = None
+
 
 def set_download_progress_hook(
     hook: Optional[Callable[[dict[str, Any]], None]],
@@ -20,12 +23,26 @@ def set_download_progress_hook(
     _download_progress_hook = hook
 
 
+def set_torrent_progress_hook(
+    hook: Optional[Callable[[dict[str, Any]], None]],
+) -> None:
+    global _torrent_progress_hook
+    _torrent_progress_hook = hook
+
+
+def emit_torrent_progress(event: dict[str, Any]) -> None:
+    h = _torrent_progress_hook
+    if h is not None:
+        h(event)
+
+
 import requests
 from filelock import FileLock
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from playwright.sync_api import sync_playwright
 
+from rss_qbittorrent import process_rss_qbittorrent_show, run_rss_pending_import_pass
 from tvdb_naming import (
     episode_filename,
     get_cached_series_data,
@@ -390,6 +407,64 @@ def create_config_from_link(
     }
 
 
+def create_rss_show_entry(
+    *,
+    name: str,
+    rss_url: str,
+    thetvdb_id: int,
+    last_ep: int = 0,
+    missing_ep: Optional[list[Any]] = None,
+    season: str = "Season.01",
+    show_name_regex: Optional[str] = None,
+    episode_regex: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build a config entry backed by an RSS feed and qBittorrent (see ``rss_qbittorrent``)."""
+    if missing_ep is None:
+        missing_ep = []
+
+    u = str(rss_url).strip()
+    nm = str(name).strip()
+    if not nm:
+        raise ValueError("Show name is required.")
+    if not u:
+        raise ValueError("RSS URL is required.")
+
+    season_clean = str(season).strip() or "Season.01"
+    season_match = re.search(r"Season\.(\d+)", season_clean, re.IGNORECASE)
+    season_number = int(season_match.group(1)) if season_match else 1
+    season_str = f"{season_number:02d}"
+
+    normalized = re.sub(r"[^\w]", ".", nm).strip(".")
+    normalized = re.sub(r"\.+", ".", normalized)
+
+    snr = (
+        str(show_name_regex).strip()
+        if show_name_regex is not None and str(show_name_regex).strip()
+        else None
+    )
+    erx = (
+        str(episode_regex).strip()
+        if episode_regex is not None and str(episode_regex).strip()
+        else None
+    )
+
+    return {
+        "type": "rss_qbittorrent",
+        "name": nm,
+        "link": u,
+        "rss_url": u,
+        "thetvdb_id": int(thetvdb_id),
+        "series": normalized,
+        "season": season_clean,
+        "ep": f"{normalized}.S{season_str}E",
+        "last_ep": int(last_ep),
+        "missing_ep": list(missing_ep),
+        "rss_torrent_jobs": [],
+        "show_name_regex": snr,
+        "episode_regex": erx,
+    }
+
+
 def run_downloads(config_path: str = "config.json") -> None:
     """Load *config_path*, download new episodes for each show, update config on disk."""
     cfg_path = config_path
@@ -400,7 +475,16 @@ def run_downloads(config_path: str = "config.json") -> None:
 
     list_problems = []
 
-    for show in config["list"]:
+    for show_index, show in enumerate(config["list"]):
+        stype = str(show.get("type") or "animexin").strip().lower()
+        if stype in ("rss_qbittorrent", "rss"):
+            print("---------------------------")
+            print(f"\n📺 Processing (RSS / qBittorrent): {show.get('name', '')}")
+            process_rss_qbittorrent_show(
+                show, show_index, config, cfg_path, list_problems
+            )
+            continue
+
         name = show["name"]
         link = show["link"]
         season = show["season"]
