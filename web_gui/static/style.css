@@ -1,7 +1,9 @@
 :root {
   --bg: #0f1219;
   --surface: #181c27;
+  --surface-glass: rgba(24, 28, 39, 0.78);
   --border: #2a3142;
+  --border-accent: rgba(108, 158, 255, 0.35);
   --text: #e8eaef;
   --muted: #8b93a7;
   --accent: #6c9eff;
@@ -11,6 +13,7 @@
   --ok: #5fd4a4;
   --radius: 10px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --bg-image: url("/static/background.png");
 }
 
 * {
@@ -21,15 +24,34 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: var(--font);
-  background: var(--bg);
   color: var(--text);
   line-height: 1.5;
+  background-color: var(--bg);
+  background-image: linear-gradient(
+      180deg,
+      rgba(8, 10, 18, 0.82) 0%,
+      rgba(10, 12, 22, 0.55) 35%,
+      rgba(8, 10, 18, 0.88) 100%
+    ),
+    var(--bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+@media (max-width: 768px) {
+  body {
+    background-attachment: scroll;
+  }
 }
 
 .page {
   max-width: 960px;
   margin: 0 auto;
   padding: 2rem 1.25rem 3rem;
+  position: relative;
+  z-index: 0;
 }
 
 .header h1 {
@@ -37,6 +59,13 @@ body {
   font-size: 1.65rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+  text-shadow:
+    0 0 32px rgba(0, 0, 0, 0.85),
+    0 2px 12px rgba(0, 0, 0, 0.6);
+}
+
+.header .muted {
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.75);
 }
 
 .muted {
@@ -51,10 +80,11 @@ body {
 
 code {
   font-size: 0.8rem;
-  background: var(--surface);
+  background: rgba(15, 18, 25, 0.92);
   padding: 0.15rem 0.4rem;
   border-radius: 4px;
   word-break: break-all;
+  border: 1px solid rgba(42, 49, 66, 0.8);
 }
 
 .flash {
@@ -75,8 +105,13 @@ code {
 }
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(58, 68, 92, 0.95);
+  box-shadow:
+    0 0 0 1px var(--border-accent) inset,
+    0 12px 40px rgba(0, 0, 0, 0.35);
   border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
   margin-bottom: 1.25rem;
@@ -142,7 +177,7 @@ input[type="text"] {
   padding: 0.55rem 0.65rem;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: rgba(15, 18, 25, 0.88);
   color: var(--text);
 }
 
@@ -397,7 +432,7 @@ input:focus {
 
 .episode-progress-inner .bar-track {
   height: 8px;
-  background: var(--bg);
+  background: rgba(15, 18, 25, 0.75);
   border-radius: 4px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -481,18 +516,24 @@ input:focus {
 }
 
 .dialog {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(58, 68, 92, 0.98);
   border-radius: var(--radius);
   padding: 0;
-  background: var(--surface);
+  background: rgba(22, 26, 38, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   color: var(--text);
   max-width: min(560px, 94vw);
   width: 100%;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  box-shadow:
+    0 0 0 1px rgba(108, 158, 255, 0.18) inset,
+    0 20px 56px rgba(0, 0, 0, 0.55);
 }
 
 .dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(4, 6, 12, 0.72);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 .dialog-inner {
@@ -558,7 +599,7 @@ input:focus {
   padding: 1rem 1.1rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
+  background: rgba(15, 18, 25, 0.75);
 }
 
 .edit-rss-extra.is-visible {
@@ -652,7 +693,7 @@ input:focus {
   font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace;
   font-size: 0.78rem;
   line-height: 1.45;
-  background: var(--bg);
+  background: rgba(10, 12, 18, 0.88);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--muted);
