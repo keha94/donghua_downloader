@@ -419,6 +419,23 @@
       return "Site";
     }
 
+    /** Season column: show number only (stored values look like ``Season 02``). */
+    function formatSeasonDisplay(season) {
+      const raw = String(season ?? "").trim();
+      const m = raw.match(/(\d+)/);
+      if (!m) return raw === "" ? "" : escapeHtml(raw);
+      const n = parseInt(m[1], 10);
+      if (!Number.isFinite(n)) return escapeHtml(raw);
+      return escapeHtml(String(n));
+    }
+
+    function parseSeasonSortNumber(season) {
+      const m = String(season ?? "").trim().match(/(\d+)/);
+      if (!m) return Number.POSITIVE_INFINITY;
+      const n = parseInt(m[1], 10);
+      return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+    }
+
     function formatBrowserDateTime(iso, withSeconds = false) {
       if (!iso) return "—";
       const dt = new Date(iso);
@@ -437,19 +454,22 @@
       if (!iso) return "—";
       const dt = new Date(iso);
       if (!Number.isFinite(dt.getTime())) return "—";
+      const weekday = dt.toLocaleDateString([], { weekday: "short" });
       const nowMs = Date.now();
       const diffMs = Math.max(0, nowMs - dt.getTime());
       const hourMs = 60 * 60 * 1000;
       const dayMs = 24 * hourMs;
+      let rel;
       if (diffMs < hourMs) {
-        return "just now";
-      }
-      if (diffMs < dayMs) {
+        rel = "just now";
+      } else if (diffMs < dayMs) {
         const hours = Math.max(1, Math.floor(diffMs / hourMs));
-        return String(hours) + "h";
+        rel = String(hours) + "h";
+      } else {
+        const days = Math.floor(diffMs / dayMs);
+        rel = String(days) + "d";
       }
-      const days = Math.floor(diffMs / dayMs);
-      return String(days) + "d";
+      return weekday + " · " + rel;
     }
 
     function formatDownloadedAtTooltip(iso) {
@@ -457,6 +477,7 @@
       const dt = new Date(iso);
       if (!Number.isFinite(dt.getTime())) return "";
       return dt.toLocaleString([], {
+        weekday: "short",
         year: "numeric",
         month: "short",
         day: "2-digit",
@@ -503,10 +524,8 @@
             { sensitivity: "base" }
           );
         case "season": {
-          const sa = parseInt(String(a.season ?? ""), 10);
-          const sb = parseInt(String(b.season ?? ""), 10);
-          const va = Number.isFinite(sa) ? sa : Number.POSITIVE_INFINITY;
-          const vb = Number.isFinite(sb) ? sb : Number.POSITIVE_INFINITY;
+          const va = parseSeasonSortNumber(a.season);
+          const vb = parseSeasonSortNumber(b.season);
           return va - vb;
         }
         case "last_ep":
@@ -554,7 +573,7 @@
           <td class="mono muted">${escapeHtml(showKindLabel(s))}</td>
           <td class="name">${escapeHtml(s.name)}</td>
           <td class="mono muted">${escapeHtml(s.folder_series || s.series || "")}</td>
-          <td>${escapeHtml(s.season || "")}</td>
+          <td class="num">${formatSeasonDisplay(s.season)}</td>
           <td class="num">${s.last_ep}</td>
           <td class="downloaded-at" title="${escapeAttr(formatDownloadedAtTooltip(s.last_downloaded_at))}">${escapeHtml(formatDownloadedAt(s.last_downloaded_at))}</td>
           <td class="num">${s.rss_pending != null && s.rss_pending > 0 ? escapeHtml(String(s.rss_pending)) : "—"}</td>
