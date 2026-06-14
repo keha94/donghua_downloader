@@ -170,6 +170,69 @@ def _largest_video_under(path: Path) -> Optional[Path]:
     return best
 
 
+def _paths_same(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return a == b
+
+
+def _largest_video_for_torrent(
+    client: Any,
+    t: Any,
+    qsettings: dict[str, Any],
+) -> Optional[Path]:
+    """Return the largest video file that belongs to *t*, not other torrents nearby.
+
+    qBittorrent may place several torrents under the same ``save_path``. Scanning that
+    directory (or falling back to it when ``content_path`` is missing locally) makes
+    ``_largest_video_under`` pick whichever completed video is biggest — often the wrong
+    episode/show. Prefer the Web API file list, which is scoped to the torrent hash.
+    """
+    rules = _save_path_rewrite_rules(qsettings)
+    h = str(getattr(t, "hash", "") or "").strip().lower()
+    save_raw = str(getattr(t, "save_path", "") or "")
+    save_local = (
+        _rewrite_qbit_save_path(Path(save_raw), rules) if save_raw else None
+    )
+
+    best: Optional[Path] = None
+    best_size = -1
+
+    if h and save_local is not None:
+        try:
+            file_entries = client.torrents.files(torrent_hash=h) or []
+        except Exception:
+            file_entries = []
+        for fe in file_entries:
+            rel = str(getattr(fe, "name", "") or "").strip()
+            if not rel or Path(rel).suffix.lower() not in VIDEO_EXTS:
+                continue
+            try:
+                sz = int(getattr(fe, "size", 0) or 0)
+            except (TypeError, ValueError):
+                sz = 0
+            cand = save_local / rel
+            if cand.is_file():
+                try:
+                    sz = max(sz, cand.stat().st_size)
+                except OSError:
+                    pass
+                if sz > best_size:
+                    best_size = sz
+                    best = cand
+
+    if best is not None:
+        return best
+
+    content = _torrent_save_path(t, qsettings)
+    if content.is_file():
+        return content if content.suffix.lower() in VIDEO_EXTS else None
+    if save_local is not None and _paths_same(content, save_local):
+        return None
+    return _largest_video_under(content)
+
+
 def _path_looks_like_uri_scheme(p: Path) -> bool:
     """True if *p* looks like afp/smb/file URL — pathlib cannot open these as local files."""
     s = str(p)
@@ -256,8 +319,6 @@ def _torrent_save_path(t: Any, qsettings: Optional[dict[str, Any]] = None) -> Pa
         trial.append(p)
     if sp and name:
         trial.append(sp / str(name))
-    if sp:
-        trial.append(sp)
 
     for cand in trial:
         local = _rewrite_qbit_save_path(cand, rules)
@@ -743,20 +804,24 @@ def _finish_rss_torrent_jobs_for_show(
                 print("💾 Config updated!")
                 continue
             print(
-                f"⚠️ {name}: torrent {h[:8]}… not in client — will retry next run. "
-                f"If your client removes finished torrents before import runs, wait for "
-                f"the scheduled downloader or run it manually once files exist."
+                f"⚠️ {name}: EP{ep_j_int} torrent {h[:8]}… gone from qBittorrent and "
+                f"not in library — dropping RSS job. Run the full downloader to re-add "
+                f"from RSS (import-only passes will not fetch a new torrent)."
             )
-            still.append(job)
+            if list_problems is not None:
+                list_problems.append(
+                    f"{name}: EP{ep_j_int} dropped stale RSS job (torrent removed)"
+                )
             continue
         if not _torrent_ready_to_relocate(t):
             still.append(job)
             continue
         content = _torrent_save_path(t, qsettings)
-        src_video = _largest_video_under(content)
+        src_video = _largest_video_for_torrent(client, t, qsettings)
         if src_video is None:
             print(
-                f"❌ {name}: EP{ep_j_int} complete but no video file under {content}"
+                f"❌ {name}: EP{ep_j_int} complete but no video file for torrent "
+                f"{h[:8]}… (content root {content})"
             )
             if _path_looks_like_uri_scheme(content):
                 print(
